@@ -1,13 +1,11 @@
-import 'dart:async';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:postgres/postgres.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../models/device_data.dart';
 import '../models/device_command.dart';
+import '../config/api_config.dart';
 
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
-  late PostgreSQLConnection _connection;
-  bool _isConnected = false;
 
   factory DatabaseService() {
     return _instance;
@@ -15,184 +13,139 @@ class DatabaseService {
 
   DatabaseService._internal();
 
-  Future<void> initialize() async {
-    final host = dotenv.env['NEON_HOST'] ?? '';
-    final port = int.parse(dotenv.env['NEON_PORT'] ?? '5432');
-    final database = dotenv.env['NEON_DATABASE'] ?? '';
-    final username = dotenv.env['NEON_USER'] ?? '';
-    final password = dotenv.env['NEON_PASSWORD'] ?? '';
+  // Méthode vide pour compatibilité avec ServiceLocator
+  Future<void> initialize() async {}
 
-    _connection = PostgreSQLConnection(
-      host,
-      port,
-      database,
-      username: username,
-      password: password,
-      useSSL: true,
-    );
+  // Méthode vide pour compatibilité avec ServiceLocator
+  Future<void> close() async {}
 
-    try {
-      await _connection.open();
-      _isConnected = true;
-      print('Connexion à la base de données réussie');
-    } catch (e) {
-      print('Erreur de connexion à la base de données: $e');
-      _isConnected = false;
-      rethrow;
-    }
-  }
-
-  Future<void> close() async {
-    if (_isConnected) {
-      await _connection.close();
-      _isConnected = false;
-    }
-  }
-
-  // Méthodes pour les données des appareils
+  // Récupérer les données d'une maison
   Future<DeviceData?> getDeviceData(String maisonId) async {
-    if (!_isConnected) await initialize();
-
-    final results = await _connection.query(
-      '''
-      SELECT * FROM device_data 
-      WHERE maison_id = @maisonId 
-      ORDER BY timestamp DESC 
-      LIMIT 1
-      ''',
-      substitutionValues: {'maisonId': maisonId},
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$maisonId/latest');
+    final response = await http.get(
+      url,
+      headers: {'x-api-key': ApiConfig.apiKey},
     );
 
-    if (results.isEmpty) {
-      print('Aucune donnée trouvée pour $maisonId');
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return DeviceData.fromJson(data);
+    } else {
+      print('Erreur lors de la récupération des données: ${response.body}');
       return null;
     }
-
-    final row = results.first;
-    final Map<String, dynamic> data = {};
-    for (var i = 0; i < row.columnDescriptions.length; i++) {
-      data[row.columnDescriptions[i].columnName] = row[i];
-    }
-
-    print(
-      'Données récupérées pour $maisonId : $data',
-    ); // Log des données récupérées
-
-    return DeviceData.fromJson(data);
   }
 
-  Future<DeviceData> getLatestDeviceData(String deviceId) async {
-    final data = await getDeviceData(deviceId); // Supprimez `limit: 1`
-    if (data == null) {
-      throw Exception('Aucune donnée trouvée pour l\'appareil $deviceId');
-    }
-    return data;
-  }
-
-  Future<void> insertDeviceData(DeviceData data) async {
-    if (!_isConnected) await initialize();
-
-    await _connection.execute(
-      '''
-      INSERT INTO device_data (
-        device_id, voltage, current1, current2, energy1, energy2, 
-        relay1_status, relay2_status, timestamp
-      ) VALUES (
-        @deviceId, @voltage, @current1, @current2, @energy1, @energy2, 
-        @relay1Status, @relay2Status, @timestamp
-      )
-      ''',
-      substitutionValues: {
-        'deviceId': data.deviceId,
-        'voltage': data.voltage,
-        'current1': data.current1,
-        'current2': data.current2,
-        'energy1': data.energy1,
-        'energy2': data.energy2,
-        'relay1Status': data.relay1Status,
-        'relay2Status': data.relay2Status,
-        'timestamp': data.timestamp.toIso8601String(),
+  // Envoyer de nouvelles données (insertion)
+  Future<bool> insertDeviceData(DeviceData data) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/data');
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ApiConfig.apiKey,
       },
+      body: jsonEncode(data.toJson()),
     );
+    return response.statusCode == 200;
   }
 
-  // Méthodes pour les commandes
+  // Récupérer les commandes en attente pour un device
   Future<List<DeviceCommand>> getPendingCommands(String deviceId) async {
-    if (!_isConnected) await initialize();
-
-    final results = await _connection.query(
-      'SELECT * FROM device_commands WHERE device_id = @deviceId AND executed = false ORDER BY timestamp',
-      substitutionValues: {'deviceId': deviceId},
+    final url = Uri.parse(
+      '${ApiConfig.baseUrl}/api/commands?deviceId=$deviceId',
+    );
+    final response = await http.get(
+      url,
+      headers: {'x-api-key': ApiConfig.apiKey},
     );
 
-    return results.map((row) {
-      final Map<String, dynamic> data = {};
-      for (var i = 0; i < row.columnDescriptions.length; i++) {
-        data[row.columnDescriptions[i].columnName] = row[i];
-      }
-      return DeviceCommand.fromJson(data);
-    }).toList();
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list.map((e) => DeviceCommand.fromJson(e)).toList();
+    } else {
+      print('Erreur lors de la récupération des commandes: ${response.body}');
+      return [];
+    }
   }
 
-  Future<void> insertCommand(DeviceCommand command) async {
-    if (!_isConnected) await initialize();
-
-    await _connection.execute(
-      '''
-      INSERT INTO device_commands (
-        device_id, command_type, parameters, timestamp, executed
-      ) VALUES (
-        @deviceId, @commandType, @parameters, @timestamp, @executed
-      )
-      ''',
-      substitutionValues: {
-        'deviceId': command.deviceId,
-        'commandType': command.commandType,
-        'parameters': command.parameters,
-        'timestamp': command.timestamp.toIso8601String(),
-        'executed': command.executed,
+  // Insérer une commande
+  Future<bool> insertCommand(DeviceCommand command) async {
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/commands');
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ApiConfig.apiKey,
       },
+      body: jsonEncode(command.toJson()),
     );
+    return response.statusCode == 200;
   }
 
-  Future<void> markCommandAsExecuted(int commandId) async {
-    if (!_isConnected) await initialize();
-
-    await _connection.execute(
-      'UPDATE device_commands SET executed = true WHERE id = @id',
-      substitutionValues: {'id': commandId},
+  // Marquer une commande comme exécutée
+  Future<bool> markCommandAsExecuted(int commandId) async {
+    final url = Uri.parse(
+      '${ApiConfig.baseUrl}/api/commands/$commandId/execute',
     );
+    final response = await http.patch(
+      url,
+      headers: {'x-api-key': ApiConfig.apiKey},
+    );
+    return response.statusCode == 200;
   }
 
-  // Méthodes pour les utilisateurs
+  // Authentification utilisateur (exemple)
   Future<Map<String, dynamic>?> getUserByCredentials(
     String username,
     String password,
   ) async {
-    if (!_isConnected) await initialize();
-
-    final results = await _connection.query(
-      'SELECT * FROM users WHERE username = @username AND password = @password',
-      substitutionValues: {'username': username, 'password': password},
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/login');
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ApiConfig.apiKey,
+      },
+      body: jsonEncode({'username': username, 'password': password}),
     );
-
-    if (results.isEmpty) return null;
-
-    final row = results.first;
-    final Map<String, dynamic> data = {};
-    for (var i = 0; i < row.columnDescriptions.length; i++) {
-      data[row.columnDescriptions[i].columnName] = row[i];
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
     }
-
-    return data;
+    return null;
   }
 
+  // Récupérer tous les utilisateurs
   Future<List<Map<String, dynamic>>> getUtilisateurs() async {
-    if (!_isConnected) await initialize();
-
-    final results = await _connection.mappedResultsQuery(
-      'SELECT * FROM utilisateurs',
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/utilisateurs');
+    final response = await http.get(
+      url,
+      headers: {'x-api-key': ApiConfig.apiKey},
     );
-    return results.map((row) => row['utilisateurs']!).toList();
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return List<Map<String, dynamic>>.from(list);
+    }
+    return [];
+  }
+
+  // Récupérer les dernières données d'un device
+  Future<DeviceData?> getLatestDeviceData(String deviceId) async {
+    // On suppose que tu as un endpoint qui retourne la dernière donnée pour un deviceId
+    final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
+    final response = await http.get(
+      url,
+      headers: {'x-api-key': ApiConfig.apiKey},
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return DeviceData.fromJson(data);
+    } else {
+      print(
+        'Erreur lors de la récupération de la dernière donnée: ${response.body}',
+      );
+      return null;
+    }
   }
 }

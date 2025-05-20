@@ -1,16 +1,41 @@
-# energc
+# EnergC Backend
 
-gstion d'enerie
+Backend pour l'application EnergC, un système de gestion d'énergie.
 
-## Getting Started
+## Configuration
 
-This project is a starting point for a Flutter application.
+1. Créer un fichier `.env` avec les variables suivantes :
+```
+NEON_HOST=votre-host.neon.tech
+NEON_PORT=5432
+NEON_DATABASE=votre-database
+NEON_USER=votre-user
+NEON_PASSWORD=votre-password
+API_KEY=votre-api-key
+FRONTEND_URL=https://votre-app-frontend.com
+```
 
-A few resources to get you started if this is your first Flutter project:
+2. Installer les dépendances :
+```bash
+npm install
+```
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+3. Démarrer le serveur :
+```bash
+npm start
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Déploiement sur Render
+
+1. Créer un nouveau Web Service sur Render
+2. Connecter votre dépôt Git
+3. Configurer les variables d'environnement dans l'interface Render
+4. Déployer !
+
+## API Endpoints
+
+- `GET /test/mesures` - Liste les 10 dernières mesures
+- `GET /test/utilisateurs` - Liste les utilisateurs
+- `POST /api/data` - Ajoute une nouvelle mesure
+- `GET /api/data/:deviceId/latest` - Récupère la dernière mesure d'un device
+- `POST /api/login` - Authentification utilisateur

@@ -2,7 +2,7 @@
  * EnergC - ESP32 Controller
  * 
  * Ce script gère :
- * - Un afficheur LCD 16x2 (I2C)
+ * - Un afficheur LCD 20x4 (I2C)
  * - Un clavier 4x4
  * - Deux capteurs de courant ACS712
  * - Un capteur de tension
@@ -30,8 +30,8 @@ const char* password = "moise1234";    // Mot de passe du réseau WiFi
 String deviceId = "esp32_maison1"; // Changer en "esp32_maison2" pour la seconde maison
 const int EEPROM_SIZE = 512;
 // Configuration API
-const char* apiUrl = "http://<votre-serveur-api>:3000/api/data"; // Remplacez par l'URL de votre API REST
-const char* apiKey = "VOTRE_API_KEY"; // Remplacez par votre clé API
+const char* apiUrl = "http://192.168.x.x:3000/api/data"; // Remplacez par l'URL de votre API REST
+const char* apiKey = "esp32_secret_key"; // Remplacez par votre clé API
 // Liste des numéros de téléphone des utilisateurs
 String userPhoneNumbers[] = {
   "+243973581507", // Propriétaire
@@ -216,6 +216,7 @@ void readSensors() {
 }
 
 void manageRelays() {
+    // Relais 1
     if (energy1 < SHUTDOWN_THRESHOLD) {
         digitalWrite(RELAY1_PIN, LOW);
         relay1Status = false;
@@ -223,15 +224,22 @@ void manageRelays() {
         digitalWrite(RELAY1_PIN, HIGH);
         relay1Status = true;
     }
-    // Idem pour le relais 2
+    // Relais 2
+    if (energy2 < SHUTDOWN_THRESHOLD) {
+        digitalWrite(RELAY2_PIN, LOW);
+        relay2Status = false;
+    } else {
+        digitalWrite(RELAY2_PIN, HIGH);
+        relay2Status = true;
+    }
 }
 
 void sendDataToDatabase() {
     if (WiFi.status() == WL_CONNECTED) {
         HTTPClient http;
-        http.begin(apiUrl);
+        http.begin(apiUrl); // Assurez-vous que apiUrl pointe vers /api/data
         http.addHeader("Content-Type", "application/json");
-        http.addHeader("Authorization", apiKey);
+        http.addHeader("x-api-key", apiKey); // Ajout du header d'authentification
 
         StaticJsonDocument<200> doc;
         doc["deviceId"] = deviceId;
@@ -252,6 +260,42 @@ void sendDataToDatabase() {
         }
         http.end();
     }
+}
+
+void fetchCommands() {
+    if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient http;
+        http.begin(String(apiUrl) + "/commands"); // Endpoint pour récupérer les commandes
+        http.addHeader("x-api-key", apiKey); // Ajout du header d'authentification
+        int httpResponseCode = http.GET();
+
+        if (httpResponseCode == 200) {
+            String payload = http.getString();
+            Serial.println("Commandes reçues : " + payload);
+
+            StaticJsonDocument<512> doc;
+            deserializeJson(doc, payload);
+
+            for (JsonObject command : doc.as<JsonArray>()) {
+                String commandType = command["commandType"];
+                int relay = command["parameters"]["relay"];
+                bool status = command["parameters"]["status"];
+
+                if (commandType == "TOGGLE_RELAY") {
+                    controlRelay(relay, status);
+                }
+            }
+        } else {
+            Serial.println("Erreur lors de la récupération des commandes : " + String(httpResponseCode));
+        }
+
+        http.end();
+    }
+}
+
+void controlRelay(int relay, bool status) {
+    int pin = (relay == 1) ? RELAY1_PIN : RELAY2_PIN;
+    digitalWrite(pin, status ? HIGH : LOW);
 }
 
 void updateLCD() {
@@ -319,6 +363,8 @@ void setup() {
     lcd.print("Hello, World!");
 
     // Autres initialisations...
+    pinMode(RELAY1_PIN, OUTPUT);
+    pinMode(RELAY2_PIN, OUTPUT);
 
     Serial.println("Test du clavier 4x4");
 }
@@ -327,6 +373,7 @@ void loop() {
     readSensors();       // Lire les capteurs
     manageRelays();      // Gérer les relais
     sendDataToDatabase(); // Envoyer les données à la base de données
+    fetchCommands();     // Récupérer les commandes depuis le backend
     handleKeypadInput(); // Gérer les entrées du clavier
     updateLCD();         // Mettre à jour l'écran LCD
     delay(1000);         // Attendre 1 seconde avant la prochaine itération

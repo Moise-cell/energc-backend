@@ -1,6 +1,5 @@
 class DeviceData {
   final String deviceId;
-  final String maisonId;
   final double voltage;
   final double current1;
   final double current2;
@@ -12,7 +11,6 @@ class DeviceData {
 
   DeviceData({
     required this.deviceId,
-    required this.maisonId,
     required this.voltage,
     required this.current1,
     required this.current2,
@@ -23,9 +21,22 @@ class DeviceData {
     required this.timestamp,
   });
 
+  factory DeviceData.fromJson(Map<String, dynamic> json) {
+    return DeviceData(
+      deviceId: json['deviceId'] as String,
+      voltage: (json['voltage'] as num).toDouble(),
+      current1: (json['current1'] as num).toDouble(),
+      current2: (json['current2'] as num).toDouble(),
+      energy1: (json['energy1'] as num).toDouble(),
+      energy2: (json['energy2'] as num).toDouble(),
+      relay1Status: json['relay1Status'] as bool,
+      relay2Status: json['relay2Status'] as bool,
+      timestamp: DateTime.parse(json['timestamp'] as String),
+    );
+  }
+
   DeviceData copyWith({
     String? deviceId,
-    String? maisonId,
     double? voltage,
     double? current1,
     double? current2,
@@ -37,7 +48,6 @@ class DeviceData {
   }) {
     return DeviceData(
       deviceId: deviceId ?? this.deviceId,
-      maisonId: maisonId ?? this.maisonId,
       voltage: voltage ?? this.voltage,
       current1: current1 ?? this.current1,
       current2: current2 ?? this.current2,
@@ -49,21 +59,17 @@ class DeviceData {
     );
   }
 
-  factory DeviceData.fromJson(Map<String, dynamic> json) {
-    return DeviceData(
-      deviceId: json['device_id'] as String,
-      maisonId: json['maison_id'] as String,
-      voltage: (json['voltage'] as num).toDouble(),
-      current1: (json['current1'] as num).toDouble(),
-      current2: (json['current2'] as num).toDouble(),
-      energy1: (json['energy1'] as num).toDouble(),
-      energy2: (json['energy2'] as num).toDouble(),
-      relay1Status: json['relay1_status'] as bool,
-      relay2Status: json['relay2_status'] as bool,
-      timestamp:
-          json['timestamp'] is String
-              ? DateTime.parse(json['timestamp'] as String)
-              : json['timestamp'] as DateTime, // Gère les deux formats
-    );
+  Map<String, dynamic> toJson() {
+    return {
+      'deviceId': deviceId,
+      'voltage': voltage,
+      'current1': current1,
+      'current2': current2,
+      'energy1': energy1,
+      'energy2': energy2,
+      'relay1Status': relay1Status,
+      'relay2Status': relay2Status,
+      'timestamp': timestamp.toIso8601String(),
+    };
   }
 }

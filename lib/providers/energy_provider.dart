@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
-import '../models/device_data.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:energc/models/device_data.dart';
 import '../services/database_service.dart';
-import '../models/device_command.dart';
+import '../config/api_config.dart';
 
 class EnergyProvider extends ChangeNotifier {
   DeviceData? maison1Data;
@@ -14,28 +16,25 @@ class EnergyProvider extends ChangeNotifier {
       isLoading = true;
       notifyListeners();
 
+      print('Avant getDeviceData maison1');
       maison1Data = await DatabaseService().getDeviceData('maison1');
-      print(
-        'Données pour maison1 : $maison1Data',
-      ); // Log des données pour maison1
+      print('Après getDeviceData maison1 : $maison1Data');
 
+      print('Avant getDeviceData maison2');
       maison2Data = await DatabaseService().getDeviceData('maison2');
-      print(
-        'Données pour maison2 : $maison2Data',
-      ); // Log des données pour maison2
+      print('Après getDeviceData maison2 : $maison2Data');
 
       isLoading = false;
       notifyListeners();
-    } catch (e, stackTrace) {
-      errorMessage = 'Erreur lors de la récupération des données : $e';
-      print('Erreur : $e\nStackTrace : $stackTrace');
+    } catch (e, stack) {
+      print('Erreur EnergyProvider.initialize: $e\n$stack');
       isLoading = false;
       notifyListeners();
     }
   }
 
   Future<void> refreshData() async {
-    await initialize(); // Recharge les données
+    await initialize();
   }
 
   Future<void> controlRelay({
@@ -44,17 +43,23 @@ class EnergyProvider extends ChangeNotifier {
     required bool status,
   }) async {
     try {
-      final command = DeviceCommand(
-        deviceId: 'esp32_main',
-        commandType: 'TOGGLE_RELAY',
-        parameters: {'relay': relayNumber, 'status': status},
-        timestamp: DateTime.now(),
-        executed: false,
+      final url = Uri.parse('${ApiConfig.baseUrl}/api/commands');
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'deviceId': maisonId,
+          'commandType': 'TOGGLE_RELAY',
+          'parameters': {'relay': relayNumber, 'status': status},
+        }),
       );
 
-      await DatabaseService().insertCommand(command);
+      if (response.statusCode != 200) {
+        throw Exception('Erreur serveur: ${response.statusCode}');
+      }
 
-      // Mettez à jour l'état local
+      // Mettre à jour l'état local
       if (maisonId == 'maison1') {
         if (relayNumber == 1) {
           maison1Data = maison1Data?.copyWith(relay1Status: status);
@@ -99,6 +104,32 @@ class EnergyProvider extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       errorMessage = 'Erreur lors de la recharge : $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchSensorData(String maisonId) async {
+    try {
+      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$maisonId');
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (maisonId == 'maison1') {
+          maison1Data = DeviceData.fromJson(data);
+        } else if (maisonId == 'maison2') {
+          maison2Data = DeviceData.fromJson(data);
+        }
+
+        notifyListeners();
+      } else {
+        errorMessage =
+            'Erreur lors de la récupération des données : ${response.statusCode}';
+        notifyListeners();
+      }
+    } catch (e) {
+      errorMessage = 'Erreur réseau : $e';
       notifyListeners();
     }
   }
