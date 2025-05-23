@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 class StatRow extends StatelessWidget {
   final String label;
   final String value;
+  final IconData? icon;
 
-  const StatRow({Key? key, required this.label, required this.value})
-    : super(key: key);
+  const StatRow({
+    super.key, 
+    required this.label, 
+    required this.value,
+    this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -14,9 +19,17 @@ class StatRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 20),
+                const SizedBox(width: 8),
+              ],
+              Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ],
           ),
           Text(value, style: const TextStyle(fontSize: 16)),
         ],

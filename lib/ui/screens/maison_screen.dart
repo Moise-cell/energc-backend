@@ -66,25 +66,25 @@ class _MaisonScreenState extends State<MaisonScreen> {
       ),
       body: Consumer<EnergyProvider>(
         builder: (context, provider, child) {
-          if (provider.isLoading) {
+          if (provider.isLoadingData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (provider.errorMessage != null) {
+          if (provider.dataErrorMessage != null) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.error_outline, size: 60, color: Colors.red),
-                  const SizedBox(height: 16),
                   Text(
-                    'Erreur: ${provider.errorMessage}',
-                    textAlign: TextAlign.center,
+                    'Erreur: ${provider.dataErrorMessage}',
                     style: const TextStyle(color: Colors.red),
+                    textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 16),
                   ElevatedButton(
-                    onPressed: () => provider.refreshData(),
+                    onPressed: () {
+                      provider.refreshData();
+                    },
                     child: const Text('Réessayer'),
                   ),
                 ],

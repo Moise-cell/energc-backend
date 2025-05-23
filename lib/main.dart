@@ -13,7 +13,7 @@ final logger = Logger();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(); // Charge .env AVANT tout accès à ApiConfig/baseUrl
-  print('BASE_URL chargé : ${dotenv.env['BASE_URL']}');
+  logger.i('BASE_URL chargé : ${dotenv.env['BASE_URL']}');
   runApp(
     MultiProvider(
       providers: [
@@ -30,21 +30,23 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'EnergC',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
-      debugShowCheckedModeBanner: false,
-      home: const WelcomeScreen(),
+      initialRoute: '/welcome',
       routes: {
         '/welcome': (context) => const WelcomeScreen(),
         '/owner': (context) => const OwnerDashboard(),
-        '/maison1':
-            (context) =>
-                const MaisonScreen(maisonId: 'maison1', maisonName: 'Maison 1'),
-        '/maison2':
-            (context) =>
-                const MaisonScreen(maisonId: 'maison2', maisonName: 'Maison 2'),
+        '/maison1': (context) => const MaisonScreen(
+              maisonId: 'maison1',
+              maisonName: 'Maison 1',
+            ),
+        '/maison2': (context) => const MaisonScreen(
+              maisonId: 'maison2',
+              maisonName: 'Maison 2',
+            ),
       },
     );
   }

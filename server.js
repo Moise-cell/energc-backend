@@ -4,7 +4,7 @@ const cors = require('cors');
 const fs = require('fs');
 const { Pool } = require('pg');
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 30000;
 const API_KEY = process.env.API_KEY || 'esp32_secret_key';
 
 // Configuration CORS pour Render
@@ -63,23 +63,135 @@ app.get('/test/utilisateurs', async (req, res) => {
   }
 });
 
-const COMMANDS_FILE = './commands.json';
-
-// Utilitaire pour charger/sauver les commandes
-function loadCommands() {
-  if (!fs.existsSync(COMMANDS_FILE)) return [];
-  return JSON.parse(fs.readFileSync(COMMANDS_FILE, 'utf8'));
-}
-function saveCommands(commands) {
-  fs.writeFileSync(COMMANDS_FILE, JSON.stringify(commands, null, 2));
-}
-
-// Middleware d'authentification simple
-function checkApiKey(req, res, next) {
-  const key = req.headers['x-api-key'];
-  if (key !== API_KEY) return res.status(401).json({ error: 'Unauthorized' });
+// Middleware pour vérifier l'API key
+const checkApiKey = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey || apiKey !== API_KEY) {
+    return res.status(401).json({ error: 'API key invalide' });
+  }
   next();
-}
+};
+
+// Fonction pour charger les commandes depuis le fichier
+const loadCommands = () => {
+  try {
+    if (fs.existsSync('commands.json')) {
+      const data = fs.readFileSync('commands.json', 'utf8');
+      return JSON.parse(data);
+    }
+    return { commands: [] };
+  } catch (error) {
+    console.error('Erreur lors du chargement des commandes:', error);
+    return { commands: [] };
+  }
+};
+
+// Fonction pour sauvegarder les commandes dans le fichier
+const saveCommands = (commands) => {
+  try {
+    fs.writeFileSync('commands.json', JSON.stringify(commands, null, 2));
+  } catch (error) {
+    console.error('Erreur lors de la sauvegarde des commandes:', error);
+  }
+};
+
+// Endpoint pour récupérer les commandes
+app.get('/api/commands', checkApiKey, (req, res) => {
+  const deviceId = req.query.deviceId;
+  const commands = loadCommands();
+  
+  if (deviceId) {
+    commands.commands = commands.commands.filter(cmd => cmd.device_id === deviceId);
+  }
+  
+  res.json(commands);
+});
+
+// Endpoint pour ajouter une commande de recharge
+app.post('/api/commands', checkApiKey, async (req, res) => {
+  try {
+    console.log('Headers reçus:', req.headers);
+    console.log('Body brut reçu:', req.body);
+    console.log('Type de body:', typeof req.body);
+    
+    const { device_id, command_type, parameters, timestamp } = req.body;
+    
+    console.log('Données extraites:', {
+      device_id,
+      command_type,
+      parameters,
+      timestamp,
+      device_id_type: typeof device_id,
+      command_type_type: typeof command_type,
+      parameters_type: typeof parameters,
+      timestamp_type: typeof timestamp
+    });
+    
+    // Vérification des champs requis
+    if (!device_id) {
+      console.log('Erreur: device_id manquant');
+      return res.status(400).json({ error: 'device_id est requis' });
+    }
+    if (!command_type) {
+      console.log('Erreur: command_type manquant');
+      return res.status(400).json({ error: 'command_type est requis' });
+    }
+    
+    // Vérification spécifique pour les commandes de recharge
+    if (command_type === 'recharge_energy') {
+      if (!parameters) {
+        console.log('Erreur: parameters manquant pour recharge_energy');
+        return res.status(400).json({ error: 'parameters est requis pour la commande recharge_energy' });
+      }
+      if (typeof parameters.energy_amount !== 'number') {
+        console.log('Erreur: energy_amount doit être un nombre, reçu:', parameters.energy_amount);
+        return res.status(400).json({ error: 'energy_amount doit être un nombre' });
+      }
+    }
+    
+    const commands = loadCommands();
+    const newCommand = {
+      device_id,
+      command_type,
+      parameters: parameters || {},
+      timestamp: timestamp || new Date().toISOString(),
+      status: 'pending'
+    };
+    
+    console.log('Nouvelle commande créée:', newCommand);
+    
+    commands.commands.push(newCommand);
+    saveCommands(commands);
+    
+    res.status(201).json(newCommand);
+  } catch (error) {
+    console.error('Erreur lors de l\'ajout de la commande:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Endpoint pour confirmer l'exécution d'une commande
+app.post('/api/commands/confirm', checkApiKey, (req, res) => {
+  try {
+    const { device_id, command_id } = req.body;
+    const commands = loadCommands();
+    
+    const command = commands.commands.find(cmd => 
+      cmd.device_id === device_id && cmd.timestamp === command_id
+    );
+    
+    if (command) {
+      command.status = 'executed';
+      saveCommands(commands);
+      res.json({ message: 'Commande confirmée' });
+    } else {
+      res.status(404).json({ error: 'Commande non trouvée' });
+    }
+  } catch (error) {
+    console.error('Erreur lors de la confirmation de la commande:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
 
 // Endpoint pour recevoir les données de l'ESP32
 app.post('/api/data', checkApiKey, async (req, res) => {
@@ -99,31 +211,12 @@ app.post('/api/data', checkApiKey, async (req, res) => {
   }
 });
 
-// Endpoint pour ajouter une commande
-app.post('/api/commands', checkApiKey, (req, res) => {
-  const { command } = req.body;
-  if (!command) {
-    return res.status(400).json({ error: 'Commande manquante' });
-  }
-  let commands = loadCommands();
-  commands.push(command);
-  saveCommands(commands);
-  res.status(201).json({ message: 'Commande ajoutée' });
-});
-
-// Endpoint pour récupérer les commandes en attente
-app.get('/api/commands', checkApiKey, (req, res) => {
-  let commands = loadCommands();
-  res.status(200).json({ commands });
-  saveCommands([]); // Vider après récupération
-});
-
 // Récupérer les dernières données d'un device
 app.get('/api/data/:deviceId/latest', checkApiKey, async (req, res) => {
   const { deviceId } = req.params;
   try {
     const result = await pool.query(
-      'SELECT * FROM mesures WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1',
+      'SELECT device_id, voltage, current1, current2, energy1, energy2, relay1_status, relay2_status, created_at FROM mesures WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1',
       [deviceId]
     );
     if (result.rows.length === 0) {

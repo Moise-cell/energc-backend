@@ -19,14 +19,16 @@ class EnergyIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: Colors.blue),
             const SizedBox(width: 8),
             Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const Spacer(),
+            const SizedBox(width: 8),
             Text(
               '${value.toStringAsFixed(2)}${unit != null ? ' $unit' : ''}',
               style: const TextStyle(fontWeight: FontWeight.bold),
@@ -34,12 +36,15 @@ class EnergyIndicator extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 6),
-        LinearProgressIndicator(
-          value: max > 0 ? (value / max).clamp(0.0, 1.0) : 0.0,
-          minHeight: 10,
-          backgroundColor: Colors.grey[300],
-          valueColor: AlwaysStoppedAnimation<Color>(
-            value > (0.2 * max) ? Colors.green : Colors.red,
+        SizedBox(
+          width: 200,
+          height: 10,
+          child: LinearProgressIndicator(
+            value: max > 0 ? (value / max).clamp(0.0, 1.0) : 0.0,
+            backgroundColor: Colors.grey[200],
+            valueColor: AlwaysStoppedAnimation<Color>(
+              value > (0.2 * max) ? Colors.green : Colors.red,
+            ),
           ),
         ),
       ],

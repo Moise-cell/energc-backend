@@ -70,7 +70,7 @@ class ServiceLocator {
     if (!_isInitialized) return;
 
     await _databaseService.close();
-    _esp32Service.stopPeriodicSync();
+    _esp32Service.dispose();
 
     _isInitialized = false;
     debugPrint('ServiceLocator: Tous les services ont été fermés');

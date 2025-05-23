@@ -20,21 +20,36 @@ class DeviceCommand {
   factory DeviceCommand.fromJson(Map<String, dynamic> json) {
     // Gérer les deux formats possibles (snake_case et camelCase)
     int? getId() {
-      if (json.containsKey('id')) return json['id'] as int?;
+      if (json.containsKey('id')) {
+        final id = json['id'];
+        if (id is int) return id;
+        if (id is String) return int.tryParse(id);
+      }
       return null;
     }
 
     String getDeviceId() {
-      if (json.containsKey('device_id')) return json['device_id'] as String;
-      if (json.containsKey('deviceId')) return json['deviceId'] as String;
-      throw FormatException('deviceId n\'a pas été trouvé dans JSON');
+      if (json.containsKey('device_id')) {
+        final deviceId = json['device_id'];
+        if (deviceId is String) return deviceId;
+      }
+      if (json.containsKey('deviceId')) {
+        final deviceId = json['deviceId'];
+        if (deviceId is String) return deviceId;
+      }
+      return 'unknown_device';
     }
 
     String getCommandType() {
-      if (json.containsKey('command_type'))
-        return json['command_type'] as String;
-      if (json.containsKey('commandType')) return json['commandType'] as String;
-      throw FormatException('commandType n\'a pas été trouvé dans JSON');
+      if (json.containsKey('command_type')) {
+        final commandType = json['command_type'];
+        if (commandType is String) return commandType;
+      }
+      if (json.containsKey('commandType')) {
+        final commandType = json['commandType'];
+        if (commandType is String) return commandType;
+      }
+      return 'unknown';
     }
 
     Map<String, dynamic> getParameters() {
@@ -44,7 +59,6 @@ class DeviceCommand {
           try {
             return jsonDecode(params) as Map<String, dynamic>;
           } catch (_) {
-            // Si jsonDecode échoue, retourner un Map vide
             return {};
           }
         } else if (params is Map) {
@@ -58,16 +72,36 @@ class DeviceCommand {
       if (json.containsKey('timestamp')) {
         final timestamp = json['timestamp'];
         if (timestamp is String) {
-          return DateTime.parse(timestamp);
+          try {
+            return DateTime.parse(timestamp);
+          } catch (_) {
+            return DateTime.now();
+          }
         } else if (timestamp is DateTime) {
           return timestamp;
+        }
+      }
+      if (json.containsKey('created_at')) {
+        final timestamp = json['created_at'];
+        if (timestamp is String) {
+          try {
+            return DateTime.parse(timestamp);
+          } catch (_) {
+            return DateTime.now();
+          }
         }
       }
       return DateTime.now();
     }
 
     bool getExecuted() {
-      if (json.containsKey('executed')) return json['executed'] as bool;
+      if (json.containsKey('executed')) {
+        final executed = json['executed'];
+        if (executed is bool) return executed;
+        if (executed is String) {
+          return executed.toLowerCase() == 'true';
+        }
+      }
       return false;
     }
 
@@ -113,6 +147,18 @@ class DeviceCommand {
       deviceId: deviceId,
       commandType: 'relay_control',
       parameters: {'relay_number': relayNumber, 'status': status},
+      timestamp: DateTime.now(),
+    );
+  }
+
+  static DeviceCommand rechargeEnergy({
+    required String deviceId,
+    required double energyAmount,
+  }) {
+    return DeviceCommand(
+      deviceId: deviceId,
+      commandType: 'recharge_energy',
+      parameters: {'energy_amount': energyAmount},
       timestamp: DateTime.now(),
     );
   }

@@ -1,21 +1,27 @@
 import 'dart:async';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io'; // Ajout de l'import pour SocketException
+import 'package:http/http.dart' as http;
+import 'package:logger/logger.dart';
 import '../models/device_data.dart';
 import '../models/device_command.dart';
 import 'database_service.dart';
 import '../config/api_config.dart';
+import 'package:flutter/foundation.dart';
 
-class ESP32Service {
+class ESP32Service extends ChangeNotifier {
   static final ESP32Service _instance = ESP32Service._internal();
+  final _logger = Logger();
   final DatabaseService _databaseService = DatabaseService();
+  DeviceData? _deviceData;
 
   // Identifiants des appareils
   final String _maison1DeviceId = 'esp32_maison1';
   final String _maison2DeviceId = 'esp32_maison2';
 
   // Timers pour la synchronisation périodique
-  Timer? _syncTimer;
+  Timer? _dataFetchTimer;
+  Timer? _commandCheckTimer;
 
   factory ESP32Service() {
     return _instance;
@@ -23,118 +29,191 @@ class ESP32Service {
 
   ESP32Service._internal();
 
+  // Getter pour accéder aux données du device
+  DeviceData? get deviceData => _deviceData;
+
   /// Initialise le service et commence à synchroniser les données
   Future<void> initialize() async {
-    // Plus besoin d'initialiser la base de données côté Flutter
-    // await _databaseService.initialize();
-
-    // Commencer la synchronisation périodique
-    startPeriodicSync();
-  }
-
-  void startPeriodicSync({int intervalSeconds = 30}) {
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(Duration(seconds: intervalSeconds), (_) {
-      syncWithDevices();
-    });
-  }
-
-  void stopPeriodicSync() {
-    _syncTimer?.cancel();
-    _syncTimer = null;
-  }
-
-  Future<void> syncWithDevices() async {
     try {
-      // Récupérer les dernières données des deux maisons
-      await _fetchLatestDataForMaison1();
-      await _fetchLatestDataForMaison2();
+      _logger.i('Initialisation du service ESP32');
 
-      // Envoyer les commandes en attente
-      await _sendPendingCommandsToMaison1();
-      await _sendPendingCommandsToMaison2();
+      // Vérifier la connexion avec les ESP32 avant de démarrer les timers
+      final maison1Connected = await checkESP32Connection(_maison1DeviceId);
+      final maison2Connected = await checkESP32Connection(_maison2DeviceId);
+
+      _logger.i(
+        'État de la connexion ESP32',
+        error: {'maison1': maison1Connected, 'maison2': maison2Connected},
+      );
+
+      // Démarrer les timers même si les ESP32 ne sont pas connectés
+      // Ils seront réessayés périodiquement
+      await _startDataFetching();
+      await _startCommandChecking();
+
+      _logger.i('Service ESP32 initialisé avec succès');
     } catch (e) {
-      print('Erreur lors de la synchronisation avec les ESP32: $e');
+      _logger.e('Erreur lors de l\'initialisation du service ESP32', error: e);
+      // Ne pas propager l'erreur pour éviter de bloquer le démarrage de l'application
     }
   }
 
-  Future<DeviceData?> _fetchLatestDataForMaison1() async {
+  Future<void> _startDataFetching() async {
     try {
-      final data = await _databaseService.getLatestDeviceData(_maison1DeviceId);
-      return data;
+      _dataFetchTimer?.cancel();
+      _dataFetchTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+        try {
+          await _fetchDataFromESP32();
+        } catch (e) {
+          _logger.e(
+            'Erreur dans le timer de récupération des données',
+            error: e,
+          );
+        }
+      });
     } catch (e) {
-      print('Erreur lors de la récupération des données de Maison 1: $e');
-      return null;
+      _logger.e(
+        'Erreur lors du démarrage du timer de récupération des données',
+        error: e,
+      );
     }
   }
 
-  Future<DeviceData?> _fetchLatestDataForMaison2() async {
+  Future<void> _startCommandChecking() async {
     try {
-      final data = await _databaseService.getLatestDeviceData(_maison2DeviceId);
-      return data;
+      _commandCheckTimer?.cancel();
+      _commandCheckTimer = Timer.periodic(const Duration(seconds: 30), (
+        _,
+      ) async {
+        try {
+          await _checkPendingCommands();
+        } catch (e) {
+          _logger.e(
+            'Erreur dans le timer de vérification des commandes',
+            error: e,
+          );
+        }
+      });
     } catch (e) {
-      print('Erreur lors de la récupération des données de Maison 2: $e');
-      return null;
+      _logger.e(
+        'Erreur lors du démarrage du timer de vérification des commandes',
+        error: e,
+      );
     }
   }
 
-  Future<void> _sendPendingCommandsToMaison1() async {
+  Future<void> _fetchDataFromESP32() async {
     try {
-      final commands = await _databaseService.getPendingCommands(
+      // Récupérer les données pour les deux appareils
+      final maison1Data = await getCurrentData(_maison1DeviceId);
+      final maison2Data = await getCurrentData(_maison2DeviceId);
+
+      if (maison1Data != null) {
+        _logger.i('Données reçues pour maison1', error: maison1Data.toJson());
+        await _databaseService.saveDeviceData(maison1Data);
+      }
+
+      if (maison2Data != null) {
+        _logger.i('Données reçues pour maison2', error: maison2Data.toJson());
+        await _databaseService.saveDeviceData(maison2Data);
+      }
+
+      // Vérifier les commandes en attente
+      await _checkPendingCommands();
+    } catch (e) {
+      _logger.e('Erreur lors de la récupération des données', error: e);
+    }
+  }
+
+  Future<void> _checkPendingCommands() async {
+    try {
+      _logger.i('Vérification des commandes en attente');
+
+      // Récupérer les commandes pour les deux devices
+      final commands1 = await _databaseService.getPendingCommands(
         _maison1DeviceId,
       );
-      for (var command in commands) {
-        // Envoyer la commande à l'ESP32 via l'API
-        final success = await _sendCommandToDevice(_maison1DeviceId, command);
-
-        if (success) {
-          // Marquer la commande comme exécutée
-          await _databaseService.markCommandAsExecuted(command.id as int);
-        }
-      }
-    } catch (e) {
-      print('Erreur lors de l\'envoi des commandes à Maison 1: $e');
-    }
-  }
-
-  Future<void> _sendPendingCommandsToMaison2() async {
-    try {
-      final commands = await _databaseService.getPendingCommands(
+      final commands2 = await _databaseService.getPendingCommands(
         _maison2DeviceId,
       );
-      for (var command in commands) {
-        // Envoyer la commande à l'ESP32 via l'API
-        final success = await _sendCommandToDevice(_maison2DeviceId, command);
+      final allCommands = [...commands1, ...commands2];
 
-        if (success) {
-          // Marquer la commande comme exécutée
-          await _databaseService.markCommandAsExecuted(command.id as int);
+      _logger.i('Commandes trouvées', error: allCommands);
+
+      // Traiter les commandes
+      for (final command in allCommands) {
+        _logger.i('Traitement de la commande', error: command.toJson());
+
+        try {
+          switch (command.commandType) {
+            case 'recharge_energy':
+              final energyAmount =
+                  command.parameters['energy_amount'] as double?;
+              if (energyAmount != null) {
+                await _executeCommand(command);
+              }
+              break;
+            case 'toggle_relay':
+              final relayNumber = command.parameters['relay_number'] as int?;
+              if (relayNumber != null) {
+                await _toggleRelay(relayNumber);
+                if (command.id != null) {
+                  await _databaseService.markCommandAsExecuted(command.id!);
+                }
+              }
+              break;
+            case 'set_relay':
+              final relayNumber = command.parameters['relay_number'] as int?;
+              final state = command.parameters['state'] as bool?;
+              if (relayNumber != null && state != null) {
+                await _setRelay(relayNumber, state);
+                if (command.id != null) {
+                  await _databaseService.markCommandAsExecuted(command.id!);
+                }
+              }
+              break;
+            default:
+              _logger.w(
+                'Type de commande non supporté: ${command.commandType}',
+              );
+          }
+        } catch (e) {
+          _logger.e('Erreur lors du traitement de la commande', error: e);
         }
       }
     } catch (e) {
-      print('Erreur lors de l\'envoi des commandes à Maison 2: $e');
+      _logger.e('Erreur lors de la vérification des commandes', error: e);
     }
   }
 
-  /// Envoie une commande à un appareil spécifique via l'API
-  Future<bool> _sendCommandToDevice(
-    String deviceId,
-    DeviceCommand command,
-  ) async {
+  Future<void> _executeCommand(DeviceCommand command) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/commands');
-
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(command.toJson()),
-      );
-
-      return response.statusCode == 200;
+      // Logique d'exécution de la commande
+      _logger.i('Exécution de la commande', error: command);
+      if (command.id != null) {
+        await _databaseService.markCommandAsExecuted(command.id!);
+      }
     } catch (e) {
-      print('Erreur lors de l\'envoi de la commande à l\'ESP32 $deviceId: $e');
-      return false;
+      _logger.e('Erreur lors de l\'exécution de la commande', error: e);
     }
+  }
+
+  Future<void> sendCommandToDevice(DeviceCommand command) async {
+    try {
+      _logger.i('Envoi de la commande à l\'ESP32', error: command);
+      await _databaseService.insertCommand(command);
+    } catch (e) {
+      _logger.e('Erreur lors de l\'envoi de la commande', error: e);
+      rethrow;
+    }
+  }
+
+  @override
+  void dispose() {
+    _logger.i('Arrêt du service ESP32');
+    _dataFetchTimer?.cancel();
+    _commandCheckTimer?.cancel();
+    super.dispose(); // Appel de la méthode parent
   }
 
   // Méthodes pour contrôler les relais
@@ -156,14 +235,15 @@ class ESP32Service {
 
     // Tenter d'envoyer la commande immédiatement
     try {
-      final success = await _sendCommandToDevice(deviceId, command);
-      if (success) {
-        await _databaseService.markCommandAsExecuted(command.id as int);
+      await sendCommandToDevice(command);
+      if (command.id != null) {
+        await _databaseService.markCommandAsExecuted(command.id!);
       }
     } catch (e) {
       // Si l'envoi direct échoue, la commande sera envoyée lors de la prochaine synchronisation
-      print(
-        'Erreur lors de l\'envoi de la commande, sera réessayé plus tard: $e',
+      _logger.w(
+        'Erreur lors de l\'envoi de la commande, sera réessayé plus tard',
+        error: e,
       );
     }
   }
@@ -173,46 +253,287 @@ class ESP32Service {
     required String maisonId,
     required double energyAmount,
   }) async {
-    if (energyAmount <= 0) {
-      throw ArgumentError('La quantité d\'énergie doit être supérieure à 0');
-    }
-
-    final deviceId =
-        maisonId == 'maison1' ? _maison1DeviceId : _maison2DeviceId;
-
-    final command = DeviceCommand(
-      deviceId: deviceId,
-      commandType: 'recharge_energy',
-      parameters: {'energy_amount': energyAmount},
-      timestamp: DateTime.now(),
-    );
-
-    await _databaseService.insertCommand(command);
-
-    // Tenter d'envoyer la commande immédiatement
     try {
-      final success = await _sendCommandToDevice(deviceId, command);
-      if (success) {
-        await _databaseService.markCommandAsExecuted(command.id as int);
-      }
-    } catch (e) {
-      // Si l'envoi direct échoue, la commande sera envoyée lors de la prochaine synchronisation
-      print(
-        'Erreur lors de l\'envoi de la commande, sera réessayé plus tard: $e',
+      _logger.i('Début de la recharge d\'énergie', error: {
+        'maisonId': maisonId,
+        'energyAmount': energyAmount,
+      });
+
+      // Construire le deviceId correct
+      final deviceId = 'esp32_$maisonId';
+      _logger.i('DeviceId construit', error: deviceId);
+
+      // Créer la commande
+      final command = DeviceCommand.rechargeEnergy(
+        deviceId: deviceId,
+        energyAmount: energyAmount,
       );
+      
+      _logger.i('Commande créée', error: {
+        'deviceId': command.deviceId,
+        'commandType': command.commandType,
+        'parameters': command.parameters,
+      });
+
+      // Envoyer la commande au serveur
+      final success = await _databaseService.saveCommand(command);
+      
+      if (!success) {
+        throw Exception('Échec de l\'envoi de la commande de recharge');
+      }
+
+      _logger.i('Commande de recharge envoyée avec succès');
+      
+      // Vérifier que l'ESP32 est connecté
+      final isConnected = await checkESP32Connection(deviceId);
+      if (!isConnected) {
+        throw Exception('L\'ESP32 n\'est pas connecté');
+      }
+
+      // Attendre la réponse de l'ESP32
+      await waitForESP32Response(deviceId);
+      
+      _logger.i('Recharge effectuée avec succès');
+    } catch (e) {
+      _logger.e('Erreur lors de l\'envoi de la commande de recharge', error: e);
+      rethrow;
     }
   }
 
   // Méthode pour obtenir les données actuelles d'une maison
-  Future<DeviceData?> getCurrentData(String maisonId) async {
-    final deviceId =
-        maisonId == 'maison1' ? _maison1DeviceId : _maison2DeviceId;
-
+  Future<DeviceData?> getCurrentData(String deviceId) async {
     try {
-      return await _databaseService.getLatestDeviceData(deviceId);
+      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
+      _logger.i('Requête des données pour $deviceId', error: url.toString());
+
+      final response = await http
+          .get(url, headers: {'x-api-key': ApiConfig.apiKey})
+          .timeout(ApiConfig.timeout);
+
+      _logger.i(
+        'Réponse reçue',
+        error: {'statusCode': response.statusCode, 'body': response.body},
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        _logger.i('Données décodées', error: data);
+
+        if (data is Map<String, dynamic>) {
+          if (data.containsKey('error')) {
+            _logger.w('Erreur API: ${data['error']}');
+            return _createDefaultDeviceData(deviceId);
+          }
+
+          // Vérifier si les données requises sont présentes et non nulles
+          final requiredFields = [
+            'voltage',
+            'current1',
+            'current2',
+            'energy1',
+            'energy2',
+          ];
+          final missingFields =
+              requiredFields
+                  .where(
+                    (field) => !data.containsKey(field) || data[field] == null,
+                  )
+                  .toList();
+
+          if (missingFields.isNotEmpty) {
+            _logger.w('Champs manquants ou nuls: ${missingFields.join(", ")}');
+            return _createDefaultDeviceData(deviceId);
+          }
+
+          // Convertir les données au format attendu par DeviceData
+          final safeData = <String, dynamic>{
+            'deviceId': data['device_id']?.toString() ?? deviceId,
+            'voltage':
+                data['voltage'] is num
+                    ? (data['voltage'] as num).toDouble()
+                    : 0.0,
+            'current1':
+                data['current1'] is num
+                    ? (data['current1'] as num).toDouble()
+                    : 0.0,
+            'current2':
+                data['current2'] is num
+                    ? (data['current2'] as num).toDouble()
+                    : 0.0,
+            'energy1':
+                data['energy1'] is num
+                    ? (data['energy1'] as num).toDouble()
+                    : 0.0,
+            'energy2':
+                data['energy2'] is num
+                    ? (data['energy2'] as num).toDouble()
+                    : 0.0,
+            'relay1Status':
+                data['relay1_status'] is bool
+                    ? data['relay1_status'] as bool
+                    : false,
+            'relay2Status':
+                data['relay2_status'] is bool
+                    ? data['relay2_status'] as bool
+                    : false,
+            'timestamp':
+                data['created_at']?.toString() ??
+                DateTime.now().toIso8601String(),
+          };
+
+          _logger.i('Données sécurisées', error: safeData);
+          final deviceData = DeviceData.fromJson(safeData);
+          _logger.i('DeviceData créé', error: deviceData.toJson());
+          return deviceData;
+        }
+        _logger.w('Format de données invalide');
+        return _createDefaultDeviceData(deviceId);
+      } else if (response.statusCode == 404) {
+        _logger.i('Aucune donnée trouvée pour $deviceId');
+        return _createDefaultDeviceData(deviceId);
+      } else {
+        _logger.e(
+          'Erreur lors de la récupération des données',
+          error: response.body,
+        );
+        return _createDefaultDeviceData(deviceId);
+      }
     } catch (e) {
-      print('Erreur lors de la récupération des données pour $maisonId: $e');
-      return null;
+      _logger.e('Erreur lors de la communication avec l\'ESP32', error: e);
+      return _createDefaultDeviceData(deviceId);
+    }
+  }
+
+  // Méthode utilitaire pour créer des données par défaut
+  DeviceData _createDefaultDeviceData(String deviceId) {
+    return DeviceData(
+      deviceId: deviceId,
+      voltage: 0.0,
+      current1: 0.0,
+      current2: 0.0,
+      energy1: 0.0,
+      energy2: 0.0,
+      relay1Status: false,
+      relay2Status: false,
+      timestamp: DateTime.now(),
+    );
+  }
+
+  Future<bool> verifyRechargeStatus(
+    String deviceId,
+    double expectedEnergy,
+  ) async {
+    try {
+      // Faire plusieurs tentatives de vérification avec un délai croissant
+      for (int i = 0; i < 5; i++) {
+        final data = await getCurrentData(deviceId);
+        if (data != null) {
+          final currentEnergy =
+              deviceId == _maison1DeviceId ? data.energy1 : data.energy2;
+          _logger.i(
+            'Vérification de la recharge (tentative ${i + 1})',
+            error: {
+              'deviceId': deviceId,
+              'expectedEnergy': expectedEnergy,
+              'currentEnergy': currentEnergy,
+            },
+          );
+
+          // Accepter une marge d'erreur de 0.1 kWh
+          if (currentEnergy >= expectedEnergy - 0.1) {
+            _logger.i('Recharge vérifiée avec succès');
+            return true;
+          }
+        }
+        // Attendre de plus en plus longtemps entre chaque tentative
+        await Future.delayed(Duration(seconds: 2 * (i + 1)));
+      }
+
+      _logger.w(
+        'La recharge n\'a pas été confirmée après plusieurs tentatives',
+      );
+      return false;
+    } catch (e) {
+      _logger.e('Erreur lors de la vérification de la recharge', error: e);
+      return false;
+    }
+  }
+
+  Future<bool> checkESP32Connection(String deviceId) async {
+    try {
+      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
+      _logger.i('Tentative de connexion à:', error: url.toString());
+
+      final client = http.Client();
+      try {
+        final response = await client
+            .get(url, headers: {'x-api-key': ApiConfig.apiKey})
+            .timeout(ApiConfig.timeout);
+
+        _logger.i(
+          'Réponse du serveur:',
+          error: {
+            'statusCode': response.statusCode,
+            'body': response.body,
+            'headers': response.headers,
+          },
+        );
+
+        return response.statusCode == 200;
+      } finally {
+        client.close();
+      }
+    } on TimeoutException {
+      _logger.e('Timeout lors de la connexion au serveur');
+      return false;
+    } on SocketException catch (e) {
+      _logger.e('Erreur de connexion au serveur:', error: e.message);
+      return false;
+    } catch (e) {
+      _logger.e(
+        'Erreur lors de la vérification de la connexion ESP32',
+        error: e,
+      );
+      return false;
+    }
+  }
+
+  Future<void> waitForESP32Response(
+    String deviceId, {
+    int maxAttempts = 3,
+  }) async {
+    for (int i = 0; i < maxAttempts; i++) {
+      if (await checkESP32Connection(deviceId)) {
+        return;
+      }
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    throw Exception('L\'ESP32 ne répond pas après $maxAttempts tentatives');
+  }
+
+  // Méthode pour basculer l'état d'un relais
+  Future<void> _toggleRelay(int relayNumber) async {
+    try {
+      final currentState = _deviceData?.relay1Status ?? false;
+      await _setRelay(relayNumber, !currentState);
+    } catch (e) {
+      _logger.e('Erreur lors du basculement du relais', error: e);
+      rethrow;
+    }
+  }
+
+  // Méthode pour définir l'état d'un relais
+  Future<void> _setRelay(int relayNumber, bool state) async {
+    try {
+      final command = DeviceCommand.relayControl(
+        deviceId: _maison2DeviceId,
+        relayNumber: relayNumber,
+        status: state,
+      );
+      await sendCommandToDevice(command);
+    } catch (e) {
+      _logger.e('Erreur lors de la définition de l\'état du relais', error: e);
+      rethrow;
     }
   }
 }

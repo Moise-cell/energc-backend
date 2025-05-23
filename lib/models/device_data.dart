@@ -22,17 +22,49 @@ class DeviceData {
   });
 
   factory DeviceData.fromJson(Map<String, dynamic> json) {
+    String getDeviceId() {
+      final deviceId = json['deviceId'] ?? json['device_id'];
+      if (deviceId == null) return 'esp32_maison1';
+      return deviceId.toString();
+    }
+
     return DeviceData(
-      deviceId: json['deviceId'] as String,
-      voltage: (json['voltage'] as num).toDouble(),
-      current1: (json['current1'] as num).toDouble(),
-      current2: (json['current2'] as num).toDouble(),
-      energy1: (json['energy1'] as num).toDouble(),
-      energy2: (json['energy2'] as num).toDouble(),
-      relay1Status: json['relay1Status'] as bool,
-      relay2Status: json['relay2Status'] as bool,
-      timestamp: DateTime.parse(json['timestamp'] as String),
+      deviceId: getDeviceId(),
+      voltage: _parseDouble(json['voltage']),
+      current1: _parseDouble(json['current1']),
+      current2: _parseDouble(json['current2']),
+      energy1: _parseDouble(json['energy1']),
+      energy2: _parseDouble(json['energy2']),
+      relay1Status: json['relay1Status'] as bool? ?? json['relay1_status'] as bool? ?? false,
+      relay2Status: json['relay2Status'] as bool? ?? json['relay2_status'] as bool? ?? false,
+      timestamp: _parseDateTime(json['timestamp'] ?? json['created_at']),
     );
+  }
+
+  static double _parseDouble(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      try {
+        return double.parse(value);
+      } catch (e) {
+        return 0.0;
+      }
+    }
+    return 0.0;
+  }
+
+  static DateTime _parseDateTime(dynamic value) {
+    if (value == null) return DateTime.now();
+    if (value is DateTime) return value;
+    if (value is String) {
+      try {
+        return DateTime.parse(value);
+      } catch (e) {
+        return DateTime.now();
+      }
+    }
+    return DateTime.now();
   }
 
   DeviceData copyWith({
