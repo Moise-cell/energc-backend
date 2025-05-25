@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     zip \
     libglu1-mesa \
-    openjdk-11-jdk
+    openjdk-11-jdk \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Flutter
 RUN git clone https://github.com/flutter/flutter.git /usr/local/flutter
@@ -20,8 +21,17 @@ RUN flutter upgrade
 # Copy files to container and build
 WORKDIR /app
 COPY . .
-RUN flutter build web
+RUN flutter build web --release
 
 # Stage 2 - Create the run-time image
 FROM nginx:1.21.1-alpine
-COPY --from=build-env /app/build/web /usr/share/nginx/html 
+COPY --from=build-env /app/build/web /usr/share/nginx/html
+
+# Add nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 80
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"] 
