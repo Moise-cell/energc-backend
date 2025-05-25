@@ -13,18 +13,31 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user
+RUN useradd -ms /bin/bash developer
+RUN mkdir -p /usr/local/flutter && chown -R developer:developer /usr/local/flutter
+
+# Switch to non-root user
+USER developer
+WORKDIR /home/developer
+
 # Install Flutter
 RUN curl -L https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.19.3-stable.tar.xz -o flutter.tar.xz \
     && tar xf flutter.tar.xz -C /usr/local \
     && rm flutter.tar.xz
 ENV PATH="/usr/local/flutter/bin:/usr/local/flutter/bin/cache/dart-sdk/bin:${PATH}"
+
+# Configure git for Flutter
+RUN git config --global --add safe.directory /usr/local/flutter
+
+# Setup Flutter
 RUN flutter doctor -v
 RUN flutter channel stable
 RUN flutter upgrade
 
 # Copy files to container and build
 WORKDIR /app
-COPY . .
+COPY --chown=developer:developer . .
 RUN flutter build web --release
 
 # Stage 2 - Create the run-time image
