@@ -4,14 +4,10 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 class ApiConfig {
   /// URL de base de l'API
   /// Charge depuis les variables d'environnement ou utilise une valeur par défaut
-  static String get baseUrl {
-    final envUrl = dotenv.env['BASE_URL'];
-    if (envUrl != null && envUrl.isNotEmpty) {
-      // Pour Render.com, on utilise toujours HTTPS
-      return envUrl.startsWith('https://') ? envUrl : 'https://$envUrl';
-    }
-    return 'https://energc-backend.onrender.com';  // URL par défaut pour Render
-  }
+  static const String baseUrl = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://energc-backend.onrender.com',
+  );
 
   /// Clé API pour l'authentification
   static String get apiKey {
@@ -19,5 +15,10 @@ class ApiConfig {
   }
 
   /// Délai d'attente des requêtes en millisecondes
-  static const Duration timeout = Duration(seconds: 10);
+  static const int timeout = 30000; // 30 seconds
+
+  static const Map<String, String> headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
 }

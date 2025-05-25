@@ -5,4 +5,9 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /
-    autoDeploy: true 
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: 8080 

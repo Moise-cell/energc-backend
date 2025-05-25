@@ -1,55 +1,45 @@
-FROM debian:bullseye-slim AS build-env
+FROM debian:bullseye-slim
 
-# Install necessary build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# Installation des dépendances système
+RUN apt-get update && apt-get install -y \
     curl \
     git \
     unzip \
     xz-utils \
     zip \
     libglu1-mesa \
-    openjdk-11-jdk \
     wget \
-    gnupg \
-    ca-certificates \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
-RUN useradd -ms /bin/bash developer
-USER developer
-WORKDIR /home/developer
-
-# Install Flutter
-RUN curl -L https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.19.3-stable.tar.xz -o flutter.tar.xz \
-    && tar xf flutter.tar.xz \
-    && rm flutter.tar.xz
-ENV PATH="/home/developer/flutter/bin:${PATH}"
-
-# Setup Flutter
-RUN flutter doctor -v
+# Installation de Flutter
+ENV FLUTTER_HOME=/flutter
+ENV PATH=$FLUTTER_HOME/bin:$PATH
+RUN git clone https://github.com/flutter/flutter.git $FLUTTER_HOME
 RUN flutter channel stable
 RUN flutter upgrade
 RUN flutter config --enable-web
 
-# Copy files to container and build
-WORKDIR /home/developer/app
-COPY --chown=developer:developer . .
+# Configuration du répertoire de travail
+WORKDIR /app
+COPY . .
 
-# Get dependencies and build
+# Installation des dépendances et build
 RUN flutter pub get
 RUN flutter build web --release
 
-# Stage 2 - Create the run-time image
-FROM nginx:1.21.1-alpine
-COPY --from=build-env /home/developer/app/build/web /usr/share/nginx/html
+# Installation de Node.js pour le serveur
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs
 
-# Add nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Installation des dépendances du serveur
+WORKDIR /app/server
+RUN npm install
 
-# Expose port 80
-EXPOSE 80
+# Retour au répertoire principal
+WORKDIR /app
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"] 
+# Exposition du port
+EXPOSE 8080
+
+# Commande de démarrage
+CMD ["sh", "-c", "cd server && npm start & cd build/web && python3 -m http.server 8080"] 
