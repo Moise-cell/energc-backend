@@ -39,7 +39,7 @@ COPY --chown=developer:developer . .
 
 # Get dependencies and build
 RUN flutter pub get
-RUN flutter build web --release --web-renderer html
+RUN flutter build web --release
 
 # Stage 2 - Create the run-time image
 FROM nginx:1.21.1-alpine
