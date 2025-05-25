@@ -18,9 +18,11 @@ class AppTheme {
       brightness: Brightness.light,
     ),
     appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
-    cardTheme: CardTheme(
+    cardTheme: const CardThemeData(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(12)),
+      ),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
@@ -64,9 +66,11 @@ class AppTheme {
       brightness: Brightness.dark,
     ),
     appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
-    cardTheme: CardTheme(
+    cardTheme: const CardThemeData(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(12)),
+      ),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
