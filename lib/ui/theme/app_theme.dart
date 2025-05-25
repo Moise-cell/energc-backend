@@ -10,39 +10,28 @@ class AppTheme {
   static const Color successColor = Color(0xFF388E3C);
 
   // Thème clair
-  static final ThemeData lightTheme = ThemeData(
+  static ThemeData lightTheme = ThemeData(
     useMaterial3: true,
-    colorScheme: const ColorScheme.light(
-      primary: primaryColor,
-      secondary: secondaryColor,
-      error: errorColor,
+    brightness: Brightness.light,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF1E88E5),
+      brightness: Brightness.light,
     ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: primaryColor,
-      foregroundColor: Colors.white,
-      elevation: 4,
-      centerTitle: true,
+    appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
+    cardTheme: CardThemeData(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        foregroundColor: Colors.white,
-        backgroundColor: primaryColor,
+        elevation: 0,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     ),
-    cardTheme: CardTheme(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: primaryColor, width: 2),
-      ),
-      filled: true,
-      fillColor: Colors.grey[100],
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     ),
     textTheme: const TextTheme(
       headlineLarge: TextStyle(
@@ -67,42 +56,28 @@ class AppTheme {
   );
 
   // Thème sombre
-  static final ThemeData darkTheme = ThemeData(
+  static ThemeData darkTheme = ThemeData(
     useMaterial3: true,
-    colorScheme: ColorScheme.dark(
-      primary: accentColor,
-      secondary: secondaryColor,
-      error: errorColor.withAlpha((0.8 * 255).toInt()), // Correction ici
-      surface: const Color(0xFF303030),
-      // background: const Color(0xFF121212), // Supprimé car déprécié
+    brightness: Brightness.dark,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF1E88E5),
+      brightness: Brightness.dark,
     ),
-    appBarTheme: AppBarTheme(
-      backgroundColor: Colors.grey[900],
-      foregroundColor: Colors.white,
-      elevation: 4,
-      centerTitle: true,
+    appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
+    cardTheme: CardThemeData(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        foregroundColor: Colors.white,
-        backgroundColor: accentColor,
+        elevation: 0,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     ),
-    cardTheme: CardTheme(
-      color: Colors.grey[800],
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ),
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: accentColor, width: 2),
-      ),
-      filled: true,
-      fillColor: Colors.grey[800],
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     ),
     textTheme: TextTheme(
       headlineLarge: const TextStyle(
