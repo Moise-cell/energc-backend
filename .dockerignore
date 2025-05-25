@@ -1,0 +1,12 @@
+.git
+.gitignore
+.dart_tool/
+.idea/
+.vscode/
+build/
+*.iml
+*.log
+*.lock
+*.g.dart
+*.freezed.dart
+.env 

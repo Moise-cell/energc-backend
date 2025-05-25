@@ -39,14 +39,12 @@ class MyApp extends StatelessWidget {
       routes: {
         '/welcome': (context) => const WelcomeScreen(),
         '/owner': (context) => const OwnerDashboard(),
-        '/maison1': (context) => const MaisonScreen(
-              maisonId: 'maison1',
-              maisonName: 'Maison 1',
-            ),
-        '/maison2': (context) => const MaisonScreen(
-              maisonId: 'maison2',
-              maisonName: 'Maison 2',
-            ),
+        '/maison1':
+            (context) =>
+                const MaisonScreen(maisonId: 'maison1', maisonName: 'Maison 1'),
+        '/maison2':
+            (context) =>
+                const MaisonScreen(maisonId: 'maison2', maisonName: 'Maison 2'),
       },
     );
   }

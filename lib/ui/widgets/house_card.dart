@@ -24,73 +24,103 @@ class HouseCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Colors.blue.shade50, Colors.white],
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue,
+                    ),
                   ),
+                  Switch(
+                    value: relayStatus,
+                    onChanged: onRelayToggle,
+                    activeColor: Colors.green,
+                    activeTrackColor: Colors.green.shade200,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withAlpha(26),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
-                Switch(
-                  value: relayStatus,
-                  onChanged: onRelayToggle,
-                  activeColor: Colors.green,
+                child: Column(
+                  children: [
+                    EnergyIndicator(
+                      value: energy,
+                      max: 100,
+                      icon: Icons.bolt,
+                      label: 'Énergie',
+                      unit: 'kWh',
+                    ),
+                    const SizedBox(height: 15),
+                    EnergyIndicator(
+                      value: voltage,
+                      max: 240,
+                      icon: Icons.electric_bolt,
+                      label: 'Tension',
+                      unit: 'V',
+                    ),
+                    const SizedBox(height: 15),
+                    EnergyIndicator(
+                      value: current,
+                      max: 30,
+                      icon: Icons.power,
+                      label: 'Courant',
+                      unit: 'A',
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                EnergyIndicator(
-                  icon: Icons.bolt,
-                  label: 'Énergie',
-                  value: energy,
-                  max: 100, // Supposons que 100 kWh est le maximum
-                  unit: 'kWh',
-                ),
-                EnergyIndicator(
-                  icon: Icons.electric_meter,
-                  label: 'Tension',
-                  value: voltage,
-                  max: 250, // Par exemple, 250V comme tension max
-                  unit: 'V',
-                ),
-                EnergyIndicator(
-                  icon: Icons.power,
-                  label: 'Courant',
-                  value: current,
-                  max: 32, // Par exemple, 32A comme courant max
-                  unit: 'A',
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                ElevatedButton.icon(
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
                   onPressed: onRecharge,
-                  icon: const Icon(Icons.add),
+                  icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Recharger'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
+                    backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );

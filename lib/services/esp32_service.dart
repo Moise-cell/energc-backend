@@ -254,49 +254,86 @@ class ESP32Service extends ChangeNotifier {
     required double energyAmount,
   }) async {
     try {
-      _logger.i('Début de la recharge d\'énergie', error: {
-        'maisonId': maisonId,
-        'energyAmount': energyAmount,
-      });
+      _logger.i(
+        'Début de la recharge d\'énergie',
+        error: {'maisonId': maisonId, 'energyAmount': energyAmount},
+      );
 
-      // Construire le deviceId correct
-      final deviceId = 'esp32_$maisonId';
-      _logger.i('DeviceId construit', error: deviceId);
+      // Vérifications de sécurité
+      if (energyAmount <= 0) {
+        _logger.w('Montant de recharge invalide', error: energyAmount);
+        throw Exception('Le montant de recharge doit être supérieur à 0');
+      }
 
-      // Créer la commande
+      if (energyAmount > 100) {
+        // Limite maximale de recharge
+        _logger.w('Montant de recharge trop élevé', error: energyAmount);
+        throw Exception('Le montant de recharge ne peut pas dépasser 100 kWh');
+      }
+
+      // Construire le deviceId
+      final deviceId =
+          maisonId == 'maison1' ? _maison1DeviceId : _maison2DeviceId;
+
+      // Vérifier la connexion avant d'envoyer la commande
+      final isConnected = await checkESP32Connection(deviceId);
+      if (!isConnected) {
+        _logger.w('ESP32 non connecté', error: deviceId);
+        throw Exception('L\'appareil n\'est pas connecté');
+      }
+
+      // Créer la commande de recharge
       final command = DeviceCommand.rechargeEnergy(
         deviceId: deviceId,
         energyAmount: energyAmount,
       );
-      
-      _logger.i('Commande créée', error: {
-        'deviceId': command.deviceId,
-        'commandType': command.commandType,
-        'parameters': command.parameters,
-      });
 
-      // Envoyer la commande au serveur
-      final success = await _databaseService.saveCommand(command);
-      
+      _logger.i('Commande de recharge créée', error: command.toJson());
+
+      // Envoyer la commande avec retry
+      bool success = false;
+      int retryCount = 0;
+      const maxRetries = 3;
+
+      while (!success && retryCount < maxRetries) {
+        try {
+          success = await _databaseService.saveCommand(command);
+          if (success) {
+            _logger.i('Commande de recharge envoyée avec succès');
+
+            // Vérifier que la recharge a bien été effectuée
+            final rechargeVerified = await verifyRechargeStatus(
+              deviceId,
+              energyAmount,
+            );
+
+            if (!rechargeVerified) {
+              _logger.w('La recharge n\'a pas été confirmée');
+              throw Exception('La recharge n\'a pas été confirmée');
+            }
+          }
+        } catch (e) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            _logger.w(
+              'Tentative de recharge échouée, nouvelle tentative',
+              error: {'tentative': retryCount, 'erreur': e},
+            );
+            await Future.delayed(const Duration(seconds: 1));
+          } else {
+            throw Exception(
+              'Échec de la recharge après $maxRetries tentatives: $e',
+            );
+          }
+        }
+      }
+
       if (!success) {
         throw Exception('Échec de l\'envoi de la commande de recharge');
       }
-
-      _logger.i('Commande de recharge envoyée avec succès');
-      
-      // Vérifier que l'ESP32 est connecté
-      final isConnected = await checkESP32Connection(deviceId);
-      if (!isConnected) {
-        throw Exception('L\'ESP32 n\'est pas connecté');
-      }
-
-      // Attendre la réponse de l'ESP32
-      await waitForESP32Response(deviceId);
-      
-      _logger.i('Recharge effectuée avec succès');
     } catch (e) {
-      _logger.e('Erreur lors de l\'envoi de la commande de recharge', error: e);
-      rethrow;
+      _logger.e('Erreur lors de la recharge d\'énergie', error: e);
+      throw Exception('Erreur lors de la recharge d\'énergie: $e');
     }
   }
 
@@ -424,7 +461,7 @@ class ESP32Service extends ChangeNotifier {
     double expectedEnergy,
   ) async {
     try {
-      // Faire plusieurs tentatives de vérification avec un délai croissant
+      // Faire 5 tentatives avec un délai de 1 seconde
       for (int i = 0; i < 5; i++) {
         final data = await getCurrentData(deviceId);
         if (data != null) {
@@ -445,8 +482,8 @@ class ESP32Service extends ChangeNotifier {
             return true;
           }
         }
-        // Attendre de plus en plus longtemps entre chaque tentative
-        await Future.delayed(Duration(seconds: 2 * (i + 1)));
+        // Attendre 1 seconde entre chaque tentative
+        await Future.delayed(const Duration(seconds: 1));
       }
 
       _logger.w(

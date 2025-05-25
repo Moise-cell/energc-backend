@@ -28,40 +28,63 @@ class DatabaseService {
       final deviceId = 'esp32_$maisonId';
       final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
       _logger.i('Requête des données pour $deviceId', error: url.toString());
-      
+
       final response = await http.get(
         url,
         headers: {'x-api-key': ApiConfig.apiKey},
       );
 
-      _logger.i('Réponse reçue', error: {
-        'statusCode': response.statusCode,
-        'body': response.body,
-      });
+      _logger.i(
+        'Réponse reçue',
+        error: {'statusCode': response.statusCode, 'body': response.body},
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         _logger.i('Données décodées', error: data);
-        
+
         if (data is Map<String, dynamic>) {
           if (data.containsKey('error')) {
             _logger.w('Erreur API: ${data['error']}');
             return _createDefaultDeviceData(deviceId);
           }
-          
+
           // Convertir les données au format attendu par DeviceData
           final safeData = <String, dynamic>{
             'deviceId': data['device_id']?.toString() ?? deviceId,
-            'voltage': data['voltage'] is num ? (data['voltage'] as num).toDouble() : 0.0,
-            'current1': data['current1'] is num ? (data['current1'] as num).toDouble() : 0.0,
-            'current2': data['current2'] is num ? (data['current2'] as num).toDouble() : 0.0,
-            'energy1': data['energy1'] is num ? (data['energy1'] as num).toDouble() : 0.0,
-            'energy2': data['energy2'] is num ? (data['energy2'] as num).toDouble() : 0.0,
-            'relay1Status': data['relay1_status'] is bool ? data['relay1_status'] as bool : false,
-            'relay2Status': data['relay2_status'] is bool ? data['relay2_status'] as bool : false,
-            'timestamp': data['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'voltage':
+                data['voltage'] is num
+                    ? (data['voltage'] as num).toDouble()
+                    : 0.0,
+            'current1':
+                data['current1'] is num
+                    ? (data['current1'] as num).toDouble()
+                    : 0.0,
+            'current2':
+                data['current2'] is num
+                    ? (data['current2'] as num).toDouble()
+                    : 0.0,
+            'energy1':
+                data['energy1'] is num
+                    ? (data['energy1'] as num).toDouble()
+                    : 0.0,
+            'energy2':
+                data['energy2'] is num
+                    ? (data['energy2'] as num).toDouble()
+                    : 0.0,
+            'relay1Status':
+                data['relay1_status'] is bool
+                    ? data['relay1_status'] as bool
+                    : false,
+            'relay2Status':
+                data['relay2_status'] is bool
+                    ? data['relay2_status'] as bool
+                    : false,
+            'timestamp':
+                data['created_at']?.toString() ??
+                DateTime.now().toIso8601String(),
           };
-          
+
           _logger.i('Données sécurisées', error: safeData);
           try {
             final deviceData = DeviceData.fromJson(safeData);
@@ -78,11 +101,17 @@ class DatabaseService {
         _logger.i('Aucune donnée trouvée pour $deviceId');
         return _createDefaultDeviceData(deviceId);
       } else {
-        _logger.e('Erreur lors de la récupération des données', error: response.body);
+        _logger.e(
+          'Erreur lors de la récupération des données',
+          error: response.body,
+        );
         return _createDefaultDeviceData(deviceId);
       }
     } catch (e) {
-      _logger.e('Erreur lors de la communication avec la base de données', error: e);
+      _logger.e(
+        'Erreur lors de la communication avec la base de données',
+        error: e,
+      );
       return _createDefaultDeviceData('esp32_$maisonId');
     }
   }
@@ -118,32 +147,46 @@ class DatabaseService {
   // Récupérer les commandes en attente pour un device
   Future<List<DeviceCommand>> getPendingCommands(String deviceId) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/commands?deviceId=$deviceId');
+      final url = Uri.parse(
+        '${ApiConfig.baseUrl}/api/commands?deviceId=$deviceId',
+      );
       _logger.i('Requête des commandes pour $deviceId', error: url.toString());
-      
+
       final response = await http.get(
         url,
         headers: {'x-api-key': ApiConfig.apiKey},
       );
 
-      _logger.i('Réponse reçue', error: {
-        'statusCode': response.statusCode,
-        'body': response.body,
-      });
+      _logger.i(
+        'Réponse reçue',
+        error: {'statusCode': response.statusCode, 'body': response.body},
+      );
 
       if (response.statusCode == 404) {
         _logger.i('Aucune commande trouvée pour $deviceId');
         return [];
       }
 
+      if (response.statusCode == 503) {
+        _logger.w(
+          'Le serveur est temporairement indisponible (503). Réessai dans 30 secondes.',
+        );
+        // Attendre 30 secondes avant de réessayer
+        await Future.delayed(const Duration(seconds: 30));
+        return getPendingCommands(deviceId);
+      }
+
       if (response.statusCode != 200) {
-        _logger.e('Erreur lors de la récupération des commandes', error: response.body);
+        _logger.e(
+          'Erreur lors de la récupération des commandes',
+          error: response.body,
+        );
         return [];
       }
 
       final data = jsonDecode(response.body);
       _logger.i('Données décodées', error: data);
-      
+
       if (data is! Map<String, dynamic>) {
         _logger.w('Format de données invalide');
         return [];
@@ -153,7 +196,7 @@ class DatabaseService {
         _logger.w('Erreur API: ${data['error']}');
         return [];
       }
-      
+
       if (!data.containsKey('commands')) {
         _logger.w('Champ commands manquant dans la réponse');
         return [];
@@ -161,7 +204,7 @@ class DatabaseService {
 
       final commands = data['commands'];
       _logger.i('Commandes trouvées', error: commands);
-      
+
       if (commands is! List) {
         _logger.w('Le champ commands n\'est pas une liste');
         return [];
@@ -176,11 +219,14 @@ class DatabaseService {
           }
 
           _logger.i('Traitement de la commande', error: commandData);
-          
-          if (!commandData.containsKey('id') || 
-              !commandData.containsKey('device_id') || 
+
+          if (!commandData.containsKey('id') ||
+              !commandData.containsKey('device_id') ||
               !commandData.containsKey('command_type')) {
-            _logger.w('Commande invalide: champs manquants', error: commandData);
+            _logger.w(
+              'Commande invalide: champs manquants',
+              error: commandData,
+            );
             continue;
           }
 
@@ -189,10 +235,12 @@ class DatabaseService {
             'deviceId': commandData['device_id'].toString(),
             'commandType': commandData['command_type'].toString(),
             'parameters': commandData['parameters'] ?? {},
-            'timestamp': commandData['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'timestamp':
+                commandData['created_at']?.toString() ??
+                DateTime.now().toIso8601String(),
             'executed': commandData['executed'] ?? false,
           };
-          
+
           _logger.i('Données sécurisées', error: safeData);
           deviceCommands.add(DeviceCommand.fromJson(safeData));
         } catch (e) {
@@ -200,10 +248,15 @@ class DatabaseService {
         }
       }
 
-      _logger.i('Nombre de commandes valides trouvées: ${deviceCommands.length}');
+      _logger.i(
+        'Nombre de commandes valides trouvées: ${deviceCommands.length}',
+      );
       return deviceCommands;
     } catch (e) {
-      _logger.e('Erreur lors de la communication avec la base de données', error: e);
+      _logger.e(
+        'Erreur lors de la communication avec la base de données',
+        error: e,
+      );
       return [];
     }
   }
@@ -295,20 +348,43 @@ class DatabaseService {
               timestamp: DateTime.now(),
             );
           }
-          
+
           // Convertir les données au format attendu par DeviceData
           final safeData = <String, dynamic>{
             'deviceId': data['device_id']?.toString() ?? deviceId,
-            'voltage': data['voltage'] is num ? (data['voltage'] as num).toDouble() : 0.0,
-            'current1': data['current1'] is num ? (data['current1'] as num).toDouble() : 0.0,
-            'current2': data['current2'] is num ? (data['current2'] as num).toDouble() : 0.0,
-            'energy1': data['energy1'] is num ? (data['energy1'] as num).toDouble() : 0.0,
-            'energy2': data['energy2'] is num ? (data['energy2'] as num).toDouble() : 0.0,
-            'relay1Status': data['relay1_status'] is bool ? data['relay1_status'] as bool : false,
-            'relay2Status': data['relay2_status'] is bool ? data['relay2_status'] as bool : false,
-            'timestamp': data['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'voltage':
+                data['voltage'] is num
+                    ? (data['voltage'] as num).toDouble()
+                    : 0.0,
+            'current1':
+                data['current1'] is num
+                    ? (data['current1'] as num).toDouble()
+                    : 0.0,
+            'current2':
+                data['current2'] is num
+                    ? (data['current2'] as num).toDouble()
+                    : 0.0,
+            'energy1':
+                data['energy1'] is num
+                    ? (data['energy1'] as num).toDouble()
+                    : 0.0,
+            'energy2':
+                data['energy2'] is num
+                    ? (data['energy2'] as num).toDouble()
+                    : 0.0,
+            'relay1Status':
+                data['relay1_status'] is bool
+                    ? data['relay1_status'] as bool
+                    : false,
+            'relay2Status':
+                data['relay2_status'] is bool
+                    ? data['relay2_status'] as bool
+                    : false,
+            'timestamp':
+                data['created_at']?.toString() ??
+                DateTime.now().toIso8601String(),
           };
-          
+
           try {
             return DeviceData.fromJson(safeData);
           } catch (e) {
@@ -340,7 +416,10 @@ class DatabaseService {
           timestamp: DateTime.now(),
         );
       } else {
-        _logger.e('Erreur lors de la récupération de la dernière donnée', error: response.body);
+        _logger.e(
+          'Erreur lors de la récupération de la dernière donnée',
+          error: response.body,
+        );
         // Retourner des données par défaut en cas d'erreur HTTP
         return DeviceData(
           deviceId: deviceId,
@@ -355,7 +434,10 @@ class DatabaseService {
         );
       }
     } catch (e) {
-      _logger.e('Erreur lors de la récupération de la dernière donnée', error: e);
+      _logger.e(
+        'Erreur lors de la récupération de la dernière donnée',
+        error: e,
+      );
       // Retourner des données par défaut en cas d'erreur de communication
       return DeviceData(
         deviceId: deviceId,
@@ -388,7 +470,10 @@ class DatabaseService {
         _logger.i('Données sauvegardées avec succès');
         return true;
       } else {
-        _logger.e('Erreur lors de la sauvegarde des données', error: response.body);
+        _logger.e(
+          'Erreur lors de la sauvegarde des données',
+          error: response.body,
+        );
         return false;
       }
     } catch (e) {
@@ -434,7 +519,10 @@ class DatabaseService {
 
       _logger.i('Données par défaut initialisées avec succès');
     } catch (e) {
-      _logger.e('Erreur lors de l\'initialisation des données par défaut', error: e);
+      _logger.e(
+        'Erreur lors de l\'initialisation des données par défaut',
+        error: e,
+      );
       rethrow;
     }
   }
@@ -442,22 +530,30 @@ class DatabaseService {
   // Sauvegarder une commande
   Future<bool> saveCommand(DeviceCommand command) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/commands');
-      
+      // S'assurer que l'URL de base se termine par /api
+      final baseUrl =
+          ApiConfig.baseUrl.endsWith('/api')
+              ? ApiConfig.baseUrl
+              : '${ApiConfig.baseUrl}/api';
+      final url = Uri.parse('$baseUrl/commands');
+
       // Log de la commande avant conversion
-      _logger.i('Commande avant conversion', error: {
-        'id': command.id,
-        'deviceId': command.deviceId,
-        'commandType': command.commandType,
-        'parameters': command.parameters,
-        'timestamp': command.timestamp.toIso8601String(),
-        'executed': command.executed,
-      });
-      
+      _logger.i(
+        'Commande avant conversion',
+        error: {
+          'id': command.id,
+          'deviceId': command.deviceId,
+          'commandType': command.commandType,
+          'parameters': command.parameters,
+          'timestamp': command.timestamp.toIso8601String(),
+          'executed': command.executed,
+        },
+      );
+
       // Log de la commande après conversion
       final commandJson = command.toDatabaseJson();
       _logger.i('Commande après conversion', error: commandJson);
-      
+
       final response = await http.post(
         url,
         headers: {
@@ -467,20 +563,36 @@ class DatabaseService {
         body: jsonEncode(commandJson),
       );
 
-      _logger.i('Réponse reçue', error: {
-        'statusCode': response.statusCode,
-        'body': response.body,
-      });
+      _logger.i(
+        'Réponse reçue',
+        error: {'statusCode': response.statusCode, 'body': response.body},
+      );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         _logger.i('Commande sauvegardée avec succès');
         return true;
+      } else if (response.statusCode == 503) {
+        _logger.w(
+          'Le serveur est temporairement indisponible (503). Réessai dans 30 secondes.',
+        );
+        await Future.delayed(const Duration(seconds: 30));
+        return saveCommand(command);
       } else {
-        _logger.e('Erreur lors de la sauvegarde de la commande', error: response.body);
+        _logger.e(
+          'Erreur lors de la sauvegarde de la commande',
+          error: {
+            'statusCode': response.statusCode,
+            'body': response.body,
+            'url': url.toString(),
+          },
+        );
         return false;
       }
     } catch (e) {
-      _logger.e('Erreur lors de la sauvegarde de la commande', error: e);
+      _logger.e(
+        'Erreur lors de la sauvegarde de la commande',
+        error: {'error': e.toString(), 'type': e.runtimeType.toString()},
+      );
       return false;
     }
   }

@@ -71,7 +71,7 @@ class EnergyProvider extends ChangeNotifier {
 
       // Initialiser le service ESP32
       await _esp32Service.initialize();
-      
+
       // Récupérer les données initiales
       await refreshData();
 
@@ -87,7 +87,11 @@ class EnergyProvider extends ChangeNotifier {
       _isLoadingData = false;
       notifyListeners();
     } catch (e, stack) {
-      _logger.e('Erreur lors de l\'initialisation des données', error: e, stackTrace: stack);
+      _logger.e(
+        'Erreur lors de l\'initialisation des données',
+        error: e,
+        stackTrace: stack,
+      );
       _dataErrorMessage = 'Erreur lors de l\'initialisation: $e';
       _isLoadingData = false;
       notifyListeners();
@@ -112,31 +116,49 @@ class EnergyProvider extends ChangeNotifier {
 
       // Mettre à jour les données des deux maisons
       try {
-        final newMaison1Data = await _esp32Service.getCurrentData(_maison1DeviceId);
+        final newMaison1Data = await _esp32Service.getCurrentData(
+          _maison1DeviceId,
+        );
         if (newMaison1Data != null) {
-          _logger.i('Données mises à jour pour maison1', error: newMaison1Data.toJson());
+          _logger.i(
+            'Données mises à jour pour maison1',
+            error: newMaison1Data.toJson(),
+          );
           maison1Data = newMaison1Data;
           await _databaseService.saveDeviceData(newMaison1Data);
         } else {
           _logger.w('Aucune donnée reçue pour maison1');
         }
       } catch (e) {
-        _logger.e('Erreur lors de la mise à jour des données de maison1', error: e);
-        _dataErrorMessage = 'Erreur lors de la mise à jour des données de maison1: $e';
+        _logger.e(
+          'Erreur lors de la mise à jour des données de maison1',
+          error: e,
+        );
+        _dataErrorMessage =
+            'Erreur lors de la mise à jour des données de maison1: $e';
       }
 
       try {
-        final newMaison2Data = await _esp32Service.getCurrentData(_maison2DeviceId);
+        final newMaison2Data = await _esp32Service.getCurrentData(
+          _maison2DeviceId,
+        );
         if (newMaison2Data != null) {
-          _logger.i('Données mises à jour pour maison2', error: newMaison2Data.toJson());
+          _logger.i(
+            'Données mises à jour pour maison2',
+            error: newMaison2Data.toJson(),
+          );
           maison2Data = newMaison2Data;
           await _databaseService.saveDeviceData(newMaison2Data);
         } else {
           _logger.w('Aucune donnée reçue pour maison2');
         }
       } catch (e) {
-        _logger.e('Erreur lors de la mise à jour des données de maison2', error: e);
-        _dataErrorMessage = 'Erreur lors de la mise à jour des données de maison2: $e';
+        _logger.e(
+          'Erreur lors de la mise à jour des données de maison2',
+          error: e,
+        );
+        _dataErrorMessage =
+            'Erreur lors de la mise à jour des données de maison2: $e';
       }
 
       // Vérifier les commandes en attente de manière sécurisée
@@ -146,7 +168,11 @@ class EnergyProvider extends ChangeNotifier {
       _isLoadingData = false;
       notifyListeners();
     } catch (e, stack) {
-      _logger.e('Erreur lors de la mise à jour des données', error: e, stackTrace: stack);
+      _logger.e(
+        'Erreur lors de la mise à jour des données',
+        error: e,
+        stackTrace: stack,
+      );
       _dataErrorMessage = 'Erreur lors de la mise à jour: $e';
       _isLoadingData = false;
       notifyListeners();
@@ -155,7 +181,9 @@ class EnergyProvider extends ChangeNotifier {
 
   Future<void> _processPendingCommandsSafely() async {
     try {
-      final commands = await _databaseService.getPendingCommands('esp32_maison1');
+      final commands = await _databaseService.getPendingCommands(
+        'esp32_maison1',
+      );
       for (final command in commands) {
         _logger.i('Traitement de la commande', error: command.toJson());
         await _esp32Service.sendCommandToDevice(command);
@@ -192,16 +220,26 @@ class EnergyProvider extends ChangeNotifier {
     required double energyAmount,
   }) async {
     try {
+      _isLoadingData = true;
+      _dataErrorMessage = null;
+      notifyListeners();
+
       await _esp32Service.rechargeEnergy(
         maisonId: maisonId,
         energyAmount: energyAmount,
       );
+
+      // Rafraîchir les données après la recharge
       await refreshData();
+
+      _isLoadingData = false;
+      notifyListeners();
     } catch (e) {
       _logger.e('Erreur lors de la recharge d\'énergie', error: e);
       _dataErrorMessage = 'Erreur lors de la recharge: $e';
+      _isLoadingData = false;
       notifyListeners();
-      rethrow;
+      // Ne pas propager l'erreur pour éviter le crash
     }
   }
 
@@ -221,8 +259,12 @@ class EnergyProvider extends ChangeNotifier {
 
         notifyListeners();
       } else {
-        _logger.e('Erreur lors de la récupération des données', error: response.statusCode);
-        _dataErrorMessage = 'Erreur lors de la récupération des données : ${response.statusCode}';
+        _logger.e(
+          'Erreur lors de la récupération des données',
+          error: response.statusCode,
+        );
+        _dataErrorMessage =
+            'Erreur lors de la récupération des données : ${response.statusCode}';
         notifyListeners();
       }
     } catch (e) {
