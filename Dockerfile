@@ -10,6 +10,9 @@ RUN apt-get update && \
     zip \
     libglu1-mesa \
     openjdk-11-jdk \
+    wget \
+    gnupg \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,11 +31,15 @@ ENV PATH="/home/developer/flutter/bin:${PATH}"
 RUN flutter doctor -v
 RUN flutter channel stable
 RUN flutter upgrade
+RUN flutter config --enable-web
 
 # Copy files to container and build
 WORKDIR /home/developer/app
 COPY --chown=developer:developer . .
-RUN flutter build web --release
+
+# Get dependencies and build
+RUN flutter pub get
+RUN flutter build web --release --web-renderer html
 
 # Stage 2 - Create the run-time image
 FROM nginx:1.21.1-alpine
