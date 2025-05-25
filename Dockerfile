@@ -14,7 +14,9 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Flutter
-RUN git clone https://github.com/flutter/flutter.git /usr/local/flutter
+RUN curl -L https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.19.3-stable.tar.xz -o flutter.tar.xz \
+    && tar xf flutter.tar.xz -C /usr/local \
+    && rm flutter.tar.xz
 ENV PATH="/usr/local/flutter/bin:/usr/local/flutter/bin/cache/dart-sdk/bin:${PATH}"
 RUN flutter doctor -v
 RUN flutter channel stable
