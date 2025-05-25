@@ -345,7 +345,7 @@ class ESP32Service extends ChangeNotifier {
 
       final response = await http
           .get(url, headers: {'x-api-key': ApiConfig.apiKey})
-          .timeout(ApiConfig.timeout);
+          .timeout(Duration(milliseconds: ApiConfig.timeout));
 
       _logger.i(
         'Réponse reçue',
@@ -505,7 +505,7 @@ class ESP32Service extends ChangeNotifier {
       try {
         final response = await client
             .get(url, headers: {'x-api-key': ApiConfig.apiKey})
-            .timeout(ApiConfig.timeout);
+            .timeout(Duration(milliseconds: ApiConfig.timeout));
 
         _logger.i(
           'Réponse du serveur:',
