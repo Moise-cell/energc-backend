@@ -1,7 +1,8 @@
-FROM debian:latest AS build-env
+FROM debian:bullseye-slim AS build-env
 
 # Install necessary build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     curl \
     git \
     unzip \
@@ -9,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     zip \
     libglu1-mesa \
     openjdk-11-jdk \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Flutter
