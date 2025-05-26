@@ -1,13 +1,16 @@
 services:
   - type: web
-    name: energc
-    env: docker
-    dockerfilePath: ./Dockerfile
-    plan: free
-    healthCheckPath: /
-    autoDeploy: true
+    name: energc-backend
+    env: node
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
     envVars:
       - key: DATABASE_URL
         sync: false
+      - key: API_KEY
+        sync: false
       - key: PORT
-        value: 8080 
+        value: 3000
+    healthCheckPath: /api/health
+    autoDeploy: true
+    plan: free 

@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: energc-server
+    env: node
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: API_KEY
+        value: esp32_secret_key
+      - key: NEON_HOST
+        value: ep-holy-smoke-a2rsvccb-pooler.eu-central-1.aws.neon.tech
+      - key: NEON_PORT
+        value: 5432
+      - key: NEON_DATABASE
+        value: neondb
+      - key: NEON_USER
+        value: neondb_owner
+      - key: NEON_PASSWORD
+        sync: false
+    healthCheckPath: /api/health 

@@ -23,6 +23,13 @@ class ESP32Service extends ChangeNotifier {
   Timer? _dataFetchTimer;
   Timer? _commandCheckTimer;
 
+  final String baseUrl = ApiConfig.baseUrl;
+  final String apiKey = ApiConfig.apiKey;
+  final StreamController<Map<String, dynamic>> _dataController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<Map<String, dynamic>> get dataStream => _dataController.stream;
+
   factory ESP32Service() {
     return _instance;
   }
@@ -61,14 +68,13 @@ class ESP32Service extends ChangeNotifier {
   Future<void> _startDataFetching() async {
     try {
       _dataFetchTimer?.cancel();
-      _dataFetchTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      _dataFetchTimer = Timer.periodic(const Duration(seconds: 5), (
+        timer,
+      ) async {
         try {
           await _fetchDataFromESP32();
         } catch (e) {
-          _logger.e(
-            'Erreur dans le timer de récupération des données',
-            error: e,
-          );
+          _logger.e('Erreur lors de la récupération des données', error: e);
         }
       });
     } catch (e) {
@@ -109,19 +115,25 @@ class ESP32Service extends ChangeNotifier {
       final maison2Data = await getCurrentData(_maison2DeviceId);
 
       if (maison1Data != null) {
-        _logger.i('Données reçues pour maison1', error: maison1Data.toJson());
+        _logger.i(
+          '💡 Données reçues pour maison1',
+          error: maison1Data.toJson(),
+        );
+        _dataController.add(maison1Data.toJson());
         await _databaseService.saveDeviceData(maison1Data);
       }
 
       if (maison2Data != null) {
-        _logger.i('Données reçues pour maison2', error: maison2Data.toJson());
+        _logger.i(
+          '💡 Données reçues pour maison2',
+          error: maison2Data.toJson(),
+        );
+        _dataController.add(maison2Data.toJson());
         await _databaseService.saveDeviceData(maison2Data);
       }
-
-      // Vérifier les commandes en attente
-      await _checkPendingCommands();
     } catch (e) {
-      _logger.e('Erreur lors de la récupération des données', error: e);
+      _logger.e('❌ Erreur de connexion: $e', error: e);
+      rethrow;
     }
   }
 
@@ -213,6 +225,7 @@ class ESP32Service extends ChangeNotifier {
     _logger.i('Arrêt du service ESP32');
     _dataFetchTimer?.cancel();
     _commandCheckTimer?.cancel();
+    _dataController.close();
     super.dispose(); // Appel de la méthode parent
   }
 
@@ -340,11 +353,11 @@ class ESP32Service extends ChangeNotifier {
   // Méthode pour obtenir les données actuelles d'une maison
   Future<DeviceData?> getCurrentData(String deviceId) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
+      final url = Uri.parse('${baseUrl}/api/data/${deviceId}/latest');
       _logger.i('Requête des données pour $deviceId', error: url.toString());
 
       final response = await http
-          .get(url, headers: {'x-api-key': ApiConfig.apiKey})
+          .get(url, headers: {'x-api-key': apiKey})
           .timeout(Duration(milliseconds: ApiConfig.timeout));
 
       _logger.i(
@@ -498,13 +511,13 @@ class ESP32Service extends ChangeNotifier {
 
   Future<bool> checkESP32Connection(String deviceId) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$deviceId/latest');
+      final url = Uri.parse('${baseUrl}/api/data/$deviceId/latest');
       _logger.i('Tentative de connexion à:', error: url.toString());
 
       final client = http.Client();
       try {
         final response = await client
-            .get(url, headers: {'x-api-key': ApiConfig.apiKey})
+            .get(url, headers: {'x-api-key': apiKey})
             .timeout(Duration(milliseconds: ApiConfig.timeout));
 
         _logger.i(
