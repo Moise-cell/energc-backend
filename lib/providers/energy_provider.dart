@@ -7,6 +7,7 @@ import '../services/database_service.dart';
 import '../services/esp32_service.dart';
 import '../config/api_config.dart';
 import 'package:logger/logger.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class EnergyProvider extends ChangeNotifier {
   DeviceData? maison1Data;
@@ -246,7 +247,10 @@ class EnergyProvider extends ChangeNotifier {
   Future<void> fetchSensorData(String maisonId) async {
     try {
       final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$maisonId');
-      final response = await http.get(url);
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/data/esp32_maison1/history'),
+        headers: {'x-api-key': 'esp32_secret_key'},
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -257,12 +261,15 @@ class EnergyProvider extends ChangeNotifier {
           maison2Data = DeviceData.fromJson(data);
         }
 
+        _logger.i('Données reçues : ${response.body}');
+
         notifyListeners();
       } else {
         _logger.e(
           'Erreur lors de la récupération des données',
           error: response.statusCode,
         );
+        _logger.e('Erreur API : ${response.statusCode} - ${response.body}');
         _dataErrorMessage =
             'Erreur lors de la récupération des données : ${response.statusCode}';
         notifyListeners();
@@ -274,3 +281,5 @@ class EnergyProvider extends ChangeNotifier {
     }
   }
 }
+
+final baseUrl = dotenv.env['BASE_URL'];
