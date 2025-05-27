@@ -66,6 +66,7 @@ app.get('/test/utilisateurs', async (req, res) => {
 // Middleware pour vérifier l'API key
 const checkApiKey = (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
+  console.log('API_KEY attendue:', API_KEY, '| API_KEY reçue:', apiKey);
   if (!apiKey || apiKey !== API_KEY) {
     return res.status(401).json({ error: 'API key invalide' });
   }
@@ -247,6 +248,21 @@ app.get('/api/data/:deviceId/latest', checkApiKey, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erreur lors de la récupération des données' });
+  }
+});
+
+// Récupérer l'historique des données d'un device
+app.get('/api/data/:deviceId/history', checkApiKey, async (req, res) => {
+  const { deviceId } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT * FROM mesures WHERE device_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [deviceId]
+    );
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erreur lors de la récupération de l\'historique' });
   }
 });
 

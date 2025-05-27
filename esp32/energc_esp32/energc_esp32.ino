@@ -29,7 +29,7 @@
 const char* ssid = "MoiseMb";
 const char* password = "moise1234";
 const char* deviceId = "esp32_maison1";
-const char* BASE_API_URL = "https://energc-server.onrender.com/api";
+const char* BASE_API_URL = "https://energc-backend.onrender.com/api";
 const char* DATA_SEND_PATH = "/data";
 const char* COMMANDS_FETCH_PATH = "/commands";
 const char* apiKey = "esp32_secret_key";
