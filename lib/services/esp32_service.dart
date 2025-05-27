@@ -13,7 +13,8 @@ class ESP32Service extends ChangeNotifier {
   static final ESP32Service _instance = ESP32Service._internal();
   final _logger = Logger();
   final DatabaseService _databaseService = DatabaseService();
-  DeviceData? _deviceData;
+  DeviceData?
+  _deviceData; // Peut être utilisé pour stocker les dernières données globales, mais attention à l'obsolescence
 
   // Identifiants des appareils
   final String _maison1DeviceId = 'esp32_maison1';
@@ -36,7 +37,7 @@ class ESP32Service extends ChangeNotifier {
 
   ESP32Service._internal();
 
-  // Getter pour accéder aux données du device
+  // Getter pour accéder aux données du device (attention: peut être obsolète si non mis à jour régulièrement)
   DeviceData? get deviceData => _deviceData;
 
   /// Initialise le service et commence à synchroniser les données
@@ -65,6 +66,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Démarre le timer de récupération périodique des données des ESP32.
   Future<void> _startDataFetching() async {
     try {
       _dataFetchTimer?.cancel();
@@ -85,6 +87,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Démarre le timer de vérification périodique des commandes en attente.
   Future<void> _startCommandChecking() async {
     try {
       _commandCheckTimer?.cancel();
@@ -108,6 +111,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Récupère les dernières données de chaque ESP32 et les sauvegarde.
   Future<void> _fetchDataFromESP32() async {
     try {
       // Récupérer les données pour les deux appareils
@@ -132,11 +136,15 @@ class ESP32Service extends ChangeNotifier {
         await _databaseService.saveDeviceData(maison2Data);
       }
     } catch (e) {
-      _logger.e('❌ Erreur de connexion: $e', error: e);
+      _logger.e(
+        '❌ Erreur de connexion lors du fetch des données: $e',
+        error: e,
+      );
       rethrow;
     }
   }
 
+  /// Vérifie et traite les commandes en attente pour les appareils.
   Future<void> _checkPendingCommands() async {
     try {
       _logger.i('Vérification des commandes en attente');
@@ -159,38 +167,108 @@ class ESP32Service extends ChangeNotifier {
         try {
           switch (command.commandType) {
             case 'recharge_energy':
-              final energyAmount =
-                  command.parameters['energy_amount'] as double?;
-              if (energyAmount != null) {
-                await _executeCommand(command);
-              }
+              // La commande de recharge est initiée par l'utilisateur et envoyée
+              // immédiatement. Si elle est ici, c'est qu'elle a été trouvée en
+              // "pending" après sa création. On la marque comme exécutée.
+              _logger.i(
+                'Commande de recharge d\'énergie traitée (marquage exécuté)',
+                error: command.toJson(),
+              );
+              // Ne pas ré-exécuter la logique de recharge ici, juste marquer.
+              await _executeCommand(
+                command,
+              ); // Marque la commande comme exécutée
               break;
+
             case 'toggle_relay':
               final relayNumber = command.parameters['relay_number'] as int?;
               if (relayNumber != null) {
-                await _toggleRelay(relayNumber);
-                if (command.id != null) {
-                  await _databaseService.markCommandAsExecuted(command.id!);
-                }
+                // Appelle la méthode pour basculer le relais, en passant le deviceId
+                await _toggleRelay(command.deviceId, relayNumber);
+                await _executeCommand(
+                  command,
+                ); // Marque la commande comme exécutée
+              } else {
+                _logger.w(
+                  'Commande toggle_relay invalide: relay_number manquant',
+                  error: command.toJson(),
+                );
+                await _executeCommand(
+                  command,
+                ); // Marquer comme exécutée pour éviter la boucle
               }
               break;
+
             case 'set_relay':
               final relayNumber = command.parameters['relay_number'] as int?;
               final state = command.parameters['state'] as bool?;
               if (relayNumber != null && state != null) {
-                await _setRelay(relayNumber, state);
-                if (command.id != null) {
-                  await _databaseService.markCommandAsExecuted(command.id!);
-                }
+                // Appelle la méthode pour définir l'état du relais, en passant le deviceId
+                await _setRelay(command.deviceId, relayNumber, state);
+                await _executeCommand(
+                  command,
+                ); // Marque la commande comme exécutée
+              } else {
+                _logger.w(
+                  'Commande set_relay invalide: champs manquants (relay_number ou state)',
+                  error: command.toJson(),
+                );
+                await _executeCommand(
+                  command,
+                ); // Marquer comme exécutée pour éviter la boucle
               }
               break;
+
+            case 'display_message':
+              final message = command.parameters['message'] as String?;
+              final line = command.parameters['line'] as int? ?? 0;
+              if (message != null) {
+                _logger.i(
+                  'Traitement commande display_message: "$message" sur ligne $line pour ${command.deviceId}',
+                  error: command.toJson(),
+                );
+                // TODO: Implémenter la logique pour envoyer ce message à l'ESP32 via le backend
+                // Exemple: await _databaseService.sendMessageToESP32(command.deviceId, message, line);
+                await _executeCommand(
+                  command,
+                ); // Marque la commande comme exécutée
+              } else {
+                _logger.w(
+                  'Commande display_message invalide: message manquant',
+                  error: command.toJson(),
+                );
+                await _executeCommand(command); // Marquer comme exécutée
+              }
+              break;
+
+            case 'request_data':
+              _logger.i(
+                'Traitement commande request_data pour ${command.deviceId}',
+                error: command.toJson(),
+              );
+              // Forcer une récupération immédiate des données pour cet appareil
+              await getCurrentData(command.deviceId);
+              await _executeCommand(
+                command,
+              ); // Marque la commande comme exécutée
+              break;
+
             default:
               _logger.w(
-                'Type de commande non supporté: ${command.commandType}',
+                'Type de commande non supporté ou traitement manquant: ${command.commandType}',
+                error: command.toJson(),
               );
+              // Si la commande n'est pas reconnue ou ne peut être traitée, elle devrait être marquée
+              // comme exécutée pour ne pas bloquer le système.
+              await _executeCommand(
+                command,
+              ); // Marquer comme exécutée pour éviter la boucle infinie
           }
         } catch (e) {
           _logger.e('Erreur lors du traitement de la commande', error: e);
+          // Si une erreur se produit pendant le traitement, marquer la commande comme exécutée
+          // pour éviter qu'elle ne soit réessayée indéfiniment si l'erreur est persistante.
+          await _executeCommand(command);
         }
       }
     } catch (e) {
@@ -198,24 +276,47 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Marque une commande comme exécutée dans la base de données.
+  /// Cette méthode est appelée après que la commande a été traitée par l'application.
   Future<void> _executeCommand(DeviceCommand command) async {
     try {
-      // Logique d'exécution de la commande
-      _logger.i('Exécution de la commande', error: command);
+      _logger.i(
+        'Marquage de la commande comme exécutée',
+        error: command.toJson(),
+      );
       if (command.id != null) {
         await _databaseService.markCommandAsExecuted(command.id!);
+      } else {
+        _logger.w(
+          'Impossible de marquer la commande comme exécutée: ID de commande est null',
+          error: command.toJson(),
+        );
       }
     } catch (e) {
-      _logger.e('Erreur lors de l\'exécution de la commande', error: e);
+      _logger.e(
+        'Erreur lors du marquage de la commande comme exécutée',
+        error: e,
+      );
     }
   }
 
+  /// Envoie une commande au backend pour qu'elle soit relayée à l'ESP32.
+  /// Cette méthode est un wrapper pour `_databaseService.saveCommand`.
+  /// Elle est utilisée par les méthodes de contrôle direct (comme `controlRelay`).
   Future<void> sendCommandToDevice(DeviceCommand command) async {
     try {
-      _logger.i('Envoi de la commande à l\'ESP32', error: command);
-      await _databaseService.insertCommand(command);
+      _logger.i(
+        'Envoi de la commande à l\'API (via DatabaseService)',
+        error: command.toJson(),
+      );
+      // saveCommand va insérer la commande dans la DB et l'envoyer au backend.
+      // Si le backend répond 200/201, la commande est considérée comme "envoyée".
+      final success = await _databaseService.saveCommand(command);
+      if (!success) {
+        throw Exception('Échec de l\'envoi de la commande au backend');
+      }
     } catch (e) {
-      _logger.e('Erreur lors de l\'envoi de la commande', error: e);
+      _logger.e('Erreur lors de l\'envoi de la commande à l\'API', error: e);
       rethrow;
     }
   }
@@ -226,10 +327,11 @@ class ESP32Service extends ChangeNotifier {
     _dataFetchTimer?.cancel();
     _commandCheckTimer?.cancel();
     _dataController.close();
-    super.dispose(); // Appel de la méthode parent
+    super.dispose();
   }
 
-  // Méthodes pour contrôler les relais
+  /// Méthode publique pour contrôler les relais d'une maison.
+  /// Crée une commande et l'envoie au backend.
   Future<void> controlRelay({
     required String maisonId,
     required int relayNumber,
@@ -244,24 +346,36 @@ class ESP32Service extends ChangeNotifier {
       status: status,
     );
 
-    await _databaseService.insertCommand(command);
+    _logger.i('Commande de contrôle de relais créée', error: command.toJson());
 
-    // Tenter d'envoyer la commande immédiatement
+    // Envoyer la commande au backend. saveCommand gère l'insertion et l'envoi HTTP.
     try {
-      await sendCommandToDevice(command);
-      if (command.id != null) {
-        await _databaseService.markCommandAsExecuted(command.id!);
+      final success = await _databaseService.saveCommand(command);
+      if (success) {
+        _logger.i(
+          'Commande de relais envoyée avec succès au backend',
+          error: command.toJson(),
+        );
+        // Si la commande a un ID après la sauvegarde, marquez-la comme exécutée immédiatement.
+        // Cela dépend si `saveCommand` met à jour l'objet `command` avec un ID du backend.
+        // Si non, le marquage sera fait par `_checkPendingCommands` plus tard.
+        // Pour l'instant, on ne marque pas ici si `command.id` est null, car il n'est pas encore assigné par le backend.
+      } else {
+        _logger.w(
+          'Échec de l\'envoi immédiat de la commande de relais. Sera réessayé par _checkPendingCommands.',
+          error: command.toJson(),
+        );
       }
     } catch (e) {
-      // Si l'envoi direct échoue, la commande sera envoyée lors de la prochaine synchronisation
-      _logger.w(
-        'Erreur lors de l\'envoi de la commande, sera réessayé plus tard',
+      _logger.e(
+        'Erreur lors de l\'envoi immédiat de la commande de relais. Sera réessayé par _checkPendingCommands.',
         error: e,
       );
     }
   }
 
-  // Méthode pour recharger l'énergie d'une maison
+  /// Méthode publique pour recharger l'énergie d'une maison.
+  /// Crée une commande de recharge et l'envoie au backend.
   Future<void> rechargeEnergy({
     required String maisonId,
     required double energyAmount,
@@ -279,7 +393,6 @@ class ESP32Service extends ChangeNotifier {
       }
 
       if (energyAmount > 100) {
-        // Limite maximale de recharge
         _logger.w('Montant de recharge trop élevé', error: energyAmount);
         throw Exception('Le montant de recharge ne peut pas dépasser 100 kWh');
       }
@@ -292,7 +405,9 @@ class ESP32Service extends ChangeNotifier {
       final isConnected = await checkESP32Connection(deviceId);
       if (!isConnected) {
         _logger.w('ESP32 non connecté', error: deviceId);
-        throw Exception('L\'appareil n\'est pas connecté');
+        // On ne lève pas d'exception ici si on veut que la commande soit sauvegardée
+        // et potentiellement réessayée par le backend ou par le timer.
+        // Si vous voulez bloquer l'action utilisateur, vous pouvez throw ici.
       }
 
       // Créer la commande de recharge
@@ -303,26 +418,40 @@ class ESP32Service extends ChangeNotifier {
 
       _logger.i('Commande de recharge créée', error: command.toJson());
 
-      // Envoyer la commande avec retry
       bool success = false;
       int retryCount = 0;
       const maxRetries = 3;
 
       while (!success && retryCount < maxRetries) {
         try {
+          // saveCommand va insérer la commande dans la DB et l'envoyer au backend.
+          // Si le backend répond 200/201, la commande est considérée comme "envoyée".
           success = await _databaseService.saveCommand(command);
           if (success) {
-            _logger.i('Commande de recharge envoyée avec succès');
+            _logger.i('Commande de recharge envoyée avec succès au backend');
 
-            // Vérifier que la recharge a bien été effectuée
+            // IMPORTANT: MARQUER LA COMMANDE COMME EXÉCUTÉE ICI
+            // Si `_databaseService.saveCommand` retourne la commande avec un ID,
+            // vous pouvez l'utiliser directement. Sinon, le marquage par _checkPendingCommands
+            // est la solution de repli.
+            // Pour l'instant, on ne marque pas ici si `command.id` est null, car il n'est pas encore assigné par le backend.
+            // Le marquage sera fait par `_checkPendingCommands` une fois qu'elle est récupérée avec un ID.
+            // Ou, si votre `saveCommand` met à jour l'objet `command` avec l'ID, vous pouvez faire :
+            // if (command.id != null) {
+            //   await _databaseService.markCommandAsExecuted(command.id!);
+            //   _logger.i('Commande de recharge marquée comme exécutée localement');
+            // }
+
             final rechargeVerified = await verifyRechargeStatus(
               deviceId,
               energyAmount,
             );
 
             if (!rechargeVerified) {
-              _logger.w('La recharge n\'a pas été confirmée');
+              _logger.w('La recharge n\'a pas été confirmée par l\'ESP32');
               throw Exception('La recharge n\'a pas été confirmée');
+            } else {
+              _logger.i('Recharge d\'énergie vérifiée avec succès');
             }
           }
         } catch (e) {
@@ -350,7 +479,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
-  // Méthode pour obtenir les données actuelles d'une maison
+  /// Récupère les données actuelles d'un appareil ESP32.
   Future<DeviceData?> getCurrentData(String deviceId) async {
     try {
       final url = Uri.parse('$baseUrl/api/data/$deviceId/latest');
@@ -375,7 +504,6 @@ class ESP32Service extends ChangeNotifier {
             return _createDefaultDeviceData(deviceId);
           }
 
-          // Vérifier si les données requises sont présentes et non nulles
           final requiredFields = [
             'voltage',
             'current1',
@@ -395,7 +523,6 @@ class ESP32Service extends ChangeNotifier {
             return _createDefaultDeviceData(deviceId);
           }
 
-          // Convertir les données au format attendu par DeviceData
           final safeData = <String, dynamic>{
             'deviceId': data['device_id']?.toString() ?? deviceId,
             'voltage':
@@ -454,7 +581,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
-  // Méthode utilitaire pour créer des données par défaut
+  /// Méthode utilitaire pour créer des données par défaut.
   DeviceData _createDefaultDeviceData(String deviceId) {
     return DeviceData(
       deviceId: deviceId,
@@ -469,6 +596,7 @@ class ESP32Service extends ChangeNotifier {
     );
   }
 
+  /// Vérifie si la recharge d'énergie a été confirmée par l'appareil.
   Future<bool> verifyRechargeStatus(
     String deviceId,
     double expectedEnergy,
@@ -509,6 +637,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Vérifie la connectivité d'un ESP32 en interrogeant son endpoint de dernières données.
   Future<bool> checkESP32Connection(String deviceId) async {
     try {
       final url = Uri.parse('$baseUrl/api/data/$deviceId/latest');
@@ -548,6 +677,7 @@ class ESP32Service extends ChangeNotifier {
     }
   }
 
+  /// Attend une réponse d'un ESP32 avec un nombre maximal de tentatives.
   Future<void> waitForESP32Response(
     String deviceId, {
     int maxAttempts = 3,
@@ -561,25 +691,49 @@ class ESP32Service extends ChangeNotifier {
     throw Exception('L\'ESP32 ne répond pas après $maxAttempts tentatives');
   }
 
-  // Méthode pour basculer l'état d'un relais
-  Future<void> _toggleRelay(int relayNumber) async {
+  /// Bascule l'état d'un relais pour un appareil donné.
+  Future<void> _toggleRelay(String deviceId, int relayNumber) async {
     try {
-      final currentState = _deviceData?.relay1Status ?? false;
-      await _setRelay(relayNumber, !currentState);
+      // Récupérer l'état actuel du relais pour l'appareil spécifique
+      final currentData = await getCurrentData(deviceId);
+      bool currentState = false;
+      if (currentData != null) {
+        currentState =
+            (relayNumber == 1)
+                ? currentData.relay1Status
+                : currentData.relay2Status;
+      } else {
+        _logger.w(
+          'Impossible de récupérer l\'état actuel du relais pour $deviceId. Assumons OFF.',
+          error: {'deviceId': deviceId, 'relayNumber': relayNumber},
+        );
+      }
+
+      // Définir le nouvel état du relais
+      await _setRelay(deviceId, relayNumber, !currentState);
+      _logger.i(
+        'Relais $relayNumber de $deviceId basculé avec succès.',
+        error: {'newState': !currentState},
+      );
     } catch (e) {
       _logger.e('Erreur lors du basculement du relais', error: e);
       rethrow;
     }
   }
 
-  // Méthode pour définir l'état d'un relais
-  Future<void> _setRelay(int relayNumber, bool state) async {
+  /// Définit l'état d'un relais spécifique pour un appareil donné.
+  Future<void> _setRelay(String deviceId, int relayNumber, bool state) async {
     try {
       final command = DeviceCommand.relayControl(
-        deviceId: _maison2DeviceId,
+        deviceId: deviceId, // Utilise le deviceId dynamique
         relayNumber: relayNumber,
         status: state,
       );
+      _logger.i(
+        'Envoi de la commande set_relay pour $deviceId relais $relayNumber à $state',
+        error: command.toJson(),
+      );
+      // Cette méthode appelle sendCommandToDevice, qui à son tour appelle _databaseService.saveCommand.
       await sendCommandToDevice(command);
     } catch (e) {
       _logger.e('Erreur lors de la définition de l\'état du relais', error: e);

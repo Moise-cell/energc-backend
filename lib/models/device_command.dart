@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert'; // Gardez cet import si vous l'utilisez ailleurs, sinon il n'est plus nécessaire pour 'parameters'
 
 class DeviceCommand {
   final int? id;
@@ -57,11 +57,13 @@ class DeviceCommand {
         final params = json['parameters'];
         if (params is String) {
           try {
+            // Si les paramètres sont une chaîne JSON, essayez de les décoder
             return jsonDecode(params) as Map<String, dynamic>;
           } catch (_) {
             return {};
           }
         } else if (params is Map) {
+          // Si les paramètres sont déjà un Map, utilisez-les directement
           return Map<String, dynamic>.from(params);
         }
       }
@@ -115,6 +117,7 @@ class DeviceCommand {
     );
   }
 
+  // Utilisé pour le logging ou l'affichage en interne (camelCase)
   Map<String, dynamic> toJson() {
     return {
       if (id != null) 'id': id,
@@ -126,18 +129,21 @@ class DeviceCommand {
     };
   }
 
+  // Utilisé spécifiquement pour l'envoi au backend (snake_case, et types d'origine)
   Map<String, dynamic> toDatabaseJson() {
     return {
-      if (id != null) 'id': id,
+      if (id != null)
+        'id': id, // L'ID n'est pas toujours envoyé pour la création
       'device_id': deviceId,
       'command_type': commandType,
-      'parameters': jsonEncode(parameters),
-      'timestamp': timestamp.toIso8601String(),
+      'parameters': parameters, // <-- LA LIGNE CLÉ MODIFIÉE !
+      'timestamp':
+          timestamp.toIso8601String(), // Ou 'created_at' si le backend l'attend
       'executed': executed,
     };
   }
 
-  // Commandes spécifiques
+  // Commandes spécifiques (constructeurs statiques simplifiés)
   static DeviceCommand relayControl({
     required String deviceId,
     required int relayNumber,
@@ -158,7 +164,9 @@ class DeviceCommand {
     return DeviceCommand(
       deviceId: deviceId,
       commandType: 'recharge_energy',
-      parameters: {'energy_amount': energyAmount},
+      parameters: {
+        'energy_amount': energyAmount,
+      }, // energyAmount est un double ici
       timestamp: DateTime.now(),
     );
   }

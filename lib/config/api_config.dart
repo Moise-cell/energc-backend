@@ -2,7 +2,7 @@
 class ApiConfig {
   /// URL de base de l'API
   /// Charge depuis les variables d'environnement ou utilise une valeur par défaut
-  static const String baseUrl = 'https://energc-server.onrender.com';
+  static const String baseUrl = 'https://energc-backend.onrender.com';
 
   /// Clé API pour l'authentification
   static const String apiKey = 'esp32_secret_key';
