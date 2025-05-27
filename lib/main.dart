@@ -12,7 +12,7 @@ final logger = Logger();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(); // Charge .env AVANT tout accès à ApiConfig/baseUrl
+  await dotenv.load();
   logger.i('BASE_URL chargé : ${dotenv.env['BASE_URL']}');
   runApp(
     MultiProvider(

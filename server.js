@@ -195,14 +195,35 @@ app.post('/api/commands/confirm', checkApiKey, (req, res) => {
 
 // Endpoint pour recevoir les données de l'ESP32
 app.post('/api/data', checkApiKey, async (req, res) => {
-  const { deviceId, voltage, current1, current2, energy1, energy2 } = req.body;
-  if (!deviceId || typeof voltage !== 'number' || typeof current1 !== 'number' || typeof current2 !== 'number' || typeof energy1 !== 'number' || typeof energy2 !== 'number') {
-    return res.status(400).json({ error: 'Données invalides' });
+  // Accepte energy OU energy1/energy2
+  const { deviceId, voltage, current1, current2, energy, energy1, energy2, relay1Status, relay2Status, timestamp } = req.body;
+
+  // Validation : au moins deviceId et une valeur d'énergie
+  if (!deviceId || typeof voltage !== 'number' || typeof current1 !== 'number' || typeof current2 !== 'number') {
+    return res.status(400).json({ error: 'Données invalides', message: 'Champs obligatoires manquants.' });
   }
+  if (energy === undefined && (energy1 === undefined || energy2 === undefined)) {
+    return res.status(400).json({ error: 'Données invalides', message: 'energy ou energy1/energy2 requis.' });
+  }
+
+  // Si energy1/energy2 absents, utilise energy pour les deux
+  const e1 = energy1 !== undefined ? energy1 : energy;
+  const e2 = energy2 !== undefined ? energy2 : energy;
+
   try {
     await pool.query(
-      'INSERT INTO mesures (device_id, voltage, current1, current2, energy1, energy2, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
-      [deviceId, voltage, current1, current2, energy1, energy2]
+      'INSERT INTO mesures (device_id, voltage, current1, current2, energy1, energy2, relay1_status, relay2_status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [
+        deviceId,
+        voltage,
+        current1,
+        current2,
+        e1,
+        e2,
+        relay1Status ?? false,
+        relay2Status ?? false,
+        timestamp ?? new Date().toISOString()
+      ]
     );
     res.status(200).json({ message: 'Données enregistrées' });
   } catch (err) {

@@ -1,25 +1,24 @@
 /*
- * EnergC - ESP32 Controller
- * 
+ * EnergC - Contrôleur ESP32
+ *
  * Ce script gère :
  * - Un afficheur LCD 20x4 (I2C)
  * - Un clavier 4x4
  * - Deux capteurs de courant ACS712
- * - Un capteur de tension
+ * - Un capteur de tension ZMPT101B
  * - Deux relais
  * - Un module GSM SIM800L
- * 
- * Il communique avec une base de données Neon.tech via HTTP
+ *
+ * Il communique avec une base de données Neon.tech via une API sur Render.com
  */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <Keypad.h>
-#include <EEPROM.h>
-//#include <SoftwareSerial.h>
 #include <SPIFFS.h>
 #include <HardwareSerial.h>
 #include <ZMPT101B.h>
@@ -27,46 +26,39 @@
 #include <math.h>
 #include <time.h>
 
-// Configuration WiFi
-const char* ssid = "MoiseMb";          // Votre réseau WiFi
-const char* password = "moise1234";     // Votre mot de passe WiFi
+const char* ssid = "MoiseMb";
+const char* password = "moise1234";
+const char* deviceId = "esp32_maison1";
+const char* BASE_API_URL = "https://energc-server.onrender.com/api";
+const char* DATA_SEND_PATH = "/data";
+const char* COMMANDS_FETCH_PATH = "/commands";
+const char* apiKey = "esp32_secret_key";
 
-// Configuration de l'appareil
-const char* deviceId = "esp32_maison1"; // Identifiant unique pour le contrôleur
-const int EEPROM_SIZE = 512;
-
-// Configuration API
-const char* API_URL = "https://energc-backend.onrender.com";  // URL Render sans port
-const char* apiKey = "esp32_secret_key"; // API key pour l'authentification
-
-// Configuration des tentatives de connexion
-const int MAX_WIFI_RETRIES = 10;        // Augmentation du nombre de tentatives
-const int WIFI_RETRY_DELAY = 5000;      // 5 secondes entre les tentatives
+const int MAX_WIFI_RETRIES = 10;
+const int WIFI_RETRY_DELAY = 5000;
 const int MAX_API_RETRIES = 3;
 const int API_RETRY_DELAY = 2000;
 
-// Liste des numéros de téléphone des utilisateurs
 String userPhoneNumbers[] = {
-  "+243973581507", // Propriétaire
-  "+243997795866", // Maison 1
-  "+243974413496"  // Maison 2
+  "+243973581507",
+  "+243997795866",
+  "+243974413496"
 };
-const int userCount = 3; // Nombre d'utilisateurs
-// Configuration des broches
-// LCD I2C utilise les broches SDA et SCL par défaut de l'ESP32
-const int VOLTAGE_SENSOR_PIN = 36;    // Capteur de tension
-const int CURRENT_SENSOR1_PIN = 35;   // Capteur de courant 1
-const int CURRENT_SENSOR2_PIN = 34;   // Capteur de courant 2
-const int RELAY1_PIN = 5;            // Relais 1
-const int RELAY2_PIN = 4;            // Relais 2
-// Initialisation du module SIM800L sur un port série matériel
-#define SIM800_RX_PIN 16 // RX du module SIM800L
-#define SIM800_TX_PIN 17 // TX du module SIM800L
-HardwareSerial sim800(2); // Utilisation du port série matériel UART2
-// Seuils d'alerte pour l'énergie
-const float ALERT_THRESHOLD = 1.0; // Alerte lorsque l'énergie restante est inférieure à 1 kWh
-const float SHUTDOWN_THRESHOLD = 0.1; // Coupure du relais lorsque l'énergie restante est inférieure à 0.1 kWh
-// Configuration du clavier 4x4
+const int userCount = 3;
+
+const int VOLTAGE_SENSOR_PIN = 36;
+const int CURRENT_SENSOR1_PIN = 35;
+const int CURRENT_SENSOR2_PIN = 34;
+const int RELAY1_PIN = 5;
+const int RELAY2_PIN = 4;
+
+#define SIM800_RX_PIN 16
+#define SIM800_TX_PIN 17
+HardwareSerial sim800(2);
+
+const float ALERT_THRESHOLD = 1.0;
+const float SHUTDOWN_THRESHOLD = 0.1;
+
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -77,100 +69,195 @@ char keys[ROWS][COLS] = {
 };
 byte rowPins[ROWS] = {13,12,14,27};
 byte colPins[COLS] = {26,25,33,32};
-// Initialisation des objets
-LiquidCrystal_I2C lcd(0x27, 20, 4); // Remplacez 0x27 par l'adresse détectée
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-// Variables globales
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+ZMPT101B capteur_tension(VOLTAGE_SENSOR_PIN, 50.0);
+ACS712 capteur_courant1(ACS712_30A, CURRENT_SENSOR1_PIN);
+ACS712 capteur_courant2(ACS712_30A, CURRENT_SENSOR2_PIN);
+
 float voltage = 0.0;
 float current1 = 0.0;
 float current2 = 0.0;
-float energy1 = 0.0;
-float energy2 = 0.0;
-float energy_user = 0.0;    // Ajout de la variable manquante
-float energy_userr = 0.0;   // Ajout de la variable manquante
-unsigned long v = 0;        // Ajout de la variable manquante
-const unsigned long energyInterval = 1000; // Intervalle de temps en millisecondes
-bool relay1Status = false;
-bool relay2Status = false;
+float energy1_instant = 0.0;
+float energy2_instant = 0.0;
+float energy_user = 10.0;
+float energy_userr = 15.0;
+const unsigned long energyInterval = 1000;
+
+bool relay1Status = true;
+bool relay2Status = true;
+
 unsigned long lastDataSendTime = 0;
 unsigned long lastCommandCheckTime = 0;
 unsigned long lastMeasurementTime = 0;
 unsigned long lastAlertTime = 0;
-const unsigned long alertInterval = 60000; // 1 minute
-String currentMessage = "";
-int menuState = 0;  // 0: affichage normal, 1: menu principal, 2: sous-menu
+const unsigned long alertInterval = 60000;
+
+int menuState = 0;
+String inputBuffer = "";
+const String ownerPassword = "1234";
+String enteredPassword = "";
+bool isPasswordMode = false;
+int previousMenuBeforePassword = 0;
+
 bool maison1AlertSent = false;
 bool maison1ShutdownSent = false;
 bool maison2AlertSent = false;
 bool maison2ShutdownSent = false;
-String inputEnergy = ""; // Stocke l'entrée de l'utilisateur
-const String ownerPassword = "1234"; // Mot de passe du propriétaire
-String enteredPassword = "";         // Stocke l'entrée du mot de passe
-bool isPasswordVerified = false;     // Indique si le mot de passe est correct
-float previousCurrent1 = 0.0; // Variable pour stocker la valeur précédente du courant 1
-float previousEnergy1 = 0.0;  // Variable pour stocker la valeur précédente de l'énergie 1
-bool isOnline = false;  // État de la connexion
+
+bool isOnline = false;
 unsigned long lastOfflineSave = 0;
-const unsigned long OFFLINE_SAVE_INTERVAL = 300000; // Sauvegarde toutes les 5 minutes en mode hors ligne
-
-// Configuration des capteurs
-ZMPT101B capteur_tension(36, 50.0); 
-ACS712 capteur_courant1(ACS712_30A, 34);
-ACS712 capteur_courant2(ACS712_30A, 35);
-
-// Configuration des relais
-#define RELAY_USER1 4
-#define RELAY_USER2 5
-#define RELAY_USER 23
-
-// Facteurs de conversion
-#define FACTOR_VOLTAGE 0.0061 // Exemple : Facteur de conversion pour le capteur de tension
-#define FACTOR_CURRENT 0.01   // Exemple : Facteur de conversion pour le capteur ACS712
-#define TIME_INTERVAL 1       // Intervalle de temps en secondes entre les lectures
-
+const unsigned long OFFLINE_SAVE_INTERVAL = 300000;
 unsigned long lastEnergCUpdate = 0;
-const unsigned long energCUpdateInterval = 120000; // 2 minutes au lieu de 30 secondes
+const unsigned long energCUpdateInterval = 20000;
 
-// Variables pour le menu
-String inputBuffer = "";
-bool isPasswordMode = false;
-int currentMenu = 0; // 0: aucun menu, 1: menu énergie, 2: menu relais, 3: menu config
+unsigned long lastWiFiRetry = 0;
+const unsigned long WIFI_RETRY_INTERVAL = 600000; // 10 minutes en ms
 
-void savePhoneNumbers() {
-  for (int i = 0; i < userCount; i++) {
-    EEPROM.writeString(i * 20, userPhoneNumbers[i]); // 20 octets par numéro
+void saveEnergyValuesToSPIFFS();
+void savePhoneNumbersToSPIFFS();
+void loadEnergyValuesFromSPIFFS();
+void loadPhoneNumbersFromSPIFFS();
+void modifyPhoneNumber(int index, String newNumber);
+void sendAlertSMS(String message, String phoneNumber);
+void readSensors();
+void manageRelays();
+void scanWiFiNetworks();
+void connectToWiFi();
+void sendDataToServer();
+void checkServerCommands();
+void processCommand(const char* commandType, const JsonObject& parameters);
+String getTimestamp();
+void updateLCD();
+void handleKeypadInput();
+void showMainMenu();
+void handleMainMenu(char key);
+void showRelayMenu();
+void handleRelayMenu(char key);
+void showConfigPhoneMenu();
+void handleConfigPhoneMenu(char key);
+void enterPasswordMode();
+void handlePasswordInput(char key);
+void clearPassword();
+void verifyPassword();
+void checkWiFiConnection();
+void saveOfflineData();
+void checkAlerts();
+
+void setup() {
+  Serial.begin(115200);
+  lcd.begin();
+  lcd.backlight();
+  lcd.clear();
+  lcd.print("Demarrage EnergC...");
+  Serial.println("Demarrage ESP32.");
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Erreur: Impossible de monter le système de fichiers SPIFFS.");
+    lcd.setCursor(0,1);
+    lcd.print("SPIFFS Erreur!");
+    delay(3000);
+    ESP.restart();
   }
-  EEPROM.commit();
+  Serial.println("SPIFFS monté avec succès.");
+
+  loadEnergyValuesFromSPIFFS();
+  loadPhoneNumbersFromSPIFFS();
+
+  sim800.begin(9600, SERIAL_8N1, SIM800_RX_PIN, SIM800_TX_PIN);
+  delay(100);
+  Serial.println("SIM800L initialisé sur UART2.");
+  sim800.println("AT");
+  delay(1000);
+  while(sim800.available()) {
+    Serial.write(sim800.read());
+  }
+
+  pinMode(RELAY1_PIN, OUTPUT);
+  pinMode(RELAY2_PIN, OUTPUT);
+  digitalWrite(RELAY1_PIN, relay1Status ? LOW : HIGH);
+  digitalWrite(RELAY2_PIN, relay2Status ? LOW : HIGH);
+
+  Serial.println("Calibration des capteurs ACS712. Assurez-vous qu'aucune charge n'est connectée.");
+  lcd.setCursor(0, 2);
+  lcd.print("Calib. Courant...");
+  capteur_courant1.calibrate();
+  capteur_courant2.calibrate();
+  Serial.println("Capteurs ACS712 calibrés.");
+  lcd.setCursor(0, 2);
+  lcd.print("Capteurs OK!     ");
+
+  connectToWiFi();
+
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.println("\nAttente de la synchronisation NTP...");
+  lcd.setCursor(0, 2);
+  lcd.print("Sync NTP...");
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2) {
+    delay(500);
+    now = time(nullptr);
+  }
+  Serial.println("Heure synchronisée.");
+  lcd.setCursor(0, 2);
+  lcd.print("NTP OK!          ");
+
+  lastDataSendTime = millis();
+  lastCommandCheckTime = millis();
+  lastMeasurementTime = millis();
+  lastAlertTime = millis();
 }
 
-void saveEnergyValues() {
-  // Sauvegarder les valeurs d'énergie dans l'EEPROM
-  EEPROM.writeFloat(0, energy1); // Sauvegarde de energy1 à l'adresse 0
-  EEPROM.writeFloat(4, energy2); // Sauvegarde de energy2 à l'adresse 4
-  EEPROM.commit(); // Valider les écritures dans l'EEPROM
+void loop() {
+  handleKeypadInput();
+  if (millis() - lastMeasurementTime >= energyInterval) {
+    readSensors();
+    manageRelays();
+    updateLCD();
+    lastMeasurementTime = millis();
+  }
+  if (millis() - lastEnergCUpdate >= energCUpdateInterval) {
+    sendDataToServer();
+    checkServerCommands();
+    lastEnergCUpdate = millis();
+  }
+  if (millis() - lastAlertTime >= alertInterval) {
+    checkAlerts();
+    lastAlertTime = millis();
+  }
+  if (!isOnline && (millis() - lastOfflineSave >= OFFLINE_SAVE_INTERVAL)) {
+    saveOfflineData();
+    lastOfflineSave = millis();
+  }
+
+  if (!isOnline && (millis() - lastWiFiRetry > WIFI_RETRY_INTERVAL)) {
+    connectToWiFi();
+    lastWiFiRetry = millis();
+  }
+  checkWiFiConnection();
 }
 
 void saveEnergyValuesToSPIFFS() {
     File file = SPIFFS.open("/energy.txt", FILE_WRITE);
     if (!file) {
-        Serial.println("Erreur : Impossible d'ouvrir le fichier pour écrire.");
+        Serial.println("Erreur : Impossible d'ouvrir le fichier pour écrire les énergies.");
         return;
     }
-    file.printf("Energy1: %.2f\nEnergy2: %.2f\n", energy1, energy2);
+    file.printf("Energy1: %.2f\nEnergy2: %.2f\nRelay1: %d\nRelay2: %d\n", energy_user, energy_userr, relay1Status, relay2Status);
     file.close();
+    Serial.println("Données d'énergie et états des relais sauvegardés dans SPIFFS.");
 }
 
 void savePhoneNumbersToSPIFFS() {
     File file = SPIFFS.open("/phone_numbers.txt", FILE_WRITE);
     if (!file) {
-        Serial.println("Erreur : Impossible d'ouvrir le fichier pour écrire.");
+        Serial.println("Erreur : Impossible d'ouvrir le fichier pour écrire les numéros de téléphone.");
         return;
     }
-
     for (int i = 0; i < userCount; i++) {
-        file.println(userPhoneNumbers[i]); // Écrire chaque numéro sur une nouvelle ligne
+        file.println(userPhoneNumbers[i]);
     }
-
     file.close();
     Serial.println("Numéros de téléphone sauvegardés dans SPIFFS.");
 }
@@ -178,110 +265,152 @@ void savePhoneNumbersToSPIFFS() {
 void loadEnergyValuesFromSPIFFS() {
     File file = SPIFFS.open("/energy.txt", FILE_READ);
     if (!file) {
-        Serial.println("Erreur : Impossible d'ouvrir le fichier pour lire.");
+        Serial.println("Fichier energy.txt non trouvé, initialisation des énergies/relais aux valeurs par défaut.");
         return;
     }
-
-    // Lire les données ligne par ligne
     String line;
     while (file.available()) {
         line = file.readStringUntil('\n');
-        Serial.println(line);
-
-        // Extraire les valeurs d'énergie
+        line.trim();
         if (line.startsWith("Energy1:")) {
-            energy1 = line.substring(8).toFloat();
+            energy_user = line.substring(line.indexOf(":") + 1).toFloat();
         } else if (line.startsWith("Energy2:")) {
-            energy2 = line.substring(8).toFloat();
+            energy_userr = line.substring(line.indexOf(":") + 1).toFloat();
+        } else if (line.startsWith("Relay1:")) {
+            relay1Status = (line.substring(line.indexOf(":") + 1).toInt() == 1);
+        } else if (line.startsWith("Relay2:")) {
+            relay2Status = (line.substring(line.indexOf(":") + 1).toInt() == 1);
         }
     }
     file.close();
-    Serial.println("Données d'énergie chargées depuis SPIFFS.");
+    Serial.println("Données d'énergie et états des relais chargés depuis SPIFFS.");
+    Serial.print("M1: "); Serial.print(energy_user); Serial.print(" kWh, M2: "); Serial.print(energy_userr); Serial.print(" kWh.");
+    Serial.print(" R1: "); Serial.print(relay1Status ? "ON" : "OFF"); Serial.print(", R2: "); Serial.println(relay2Status ? "ON" : "OFF");
 }
 
 void loadPhoneNumbersFromSPIFFS() {
     File file = SPIFFS.open("/phone_numbers.txt", FILE_READ);
     if (!file) {
-        Serial.println("Erreur : Impossible d'ouvrir le fichier pour lire.");
+        Serial.println("Fichier phone_numbers.txt non trouvé, utilisation des numéros par défaut.");
         return;
     }
-
     int i = 0;
     while (file.available() && i < userCount) {
-        userPhoneNumbers[i] = file.readStringUntil('\n'); // Lire chaque ligne
-        userPhoneNumbers[i].trim(); // Supprimer les espaces ou sauts de ligne inutiles
+        userPhoneNumbers[i] = file.readStringUntil('\n');
+        userPhoneNumbers[i].trim();
         i++;
     }
-
     file.close();
     Serial.println("Numéros de téléphone chargés depuis SPIFFS.");
-}
-
-void loadPhoneNumbers() {
-  for (int i = 0; i < userCount; i++) {
-    userPhoneNumbers[i] = EEPROM.readString(i * 20); // Charger les numéros depuis l'EEPROM
-  }
+    for (int j = 0; j < userCount; j++) {
+      Serial.print("Numéro "); Serial.print(j); Serial.print(": "); Serial.println(userPhoneNumbers[j]);
+    }
 }
 
 void modifyPhoneNumber(int index, String newNumber) {
     if (index >= 0 && index < userCount) {
         userPhoneNumbers[index] = newNumber;
-        savePhoneNumbersToSPIFFS(); // Sauvegarder les modifications dans SPIFFS
+        savePhoneNumbersToSPIFFS();
         Serial.println("Numéro de téléphone modifié et sauvegardé.");
+        lcd.clear();
+        lcd.print("Numero "); lcd.print(index); lcd.print(" OK");
+        lcd.setCursor(0,1); lcd.print(newNumber);
+        delay(2000);
     } else {
-        Serial.println("Index invalide.");
+        Serial.println("Index invalide pour la modification du numéro.");
+        lcd.clear();
+        lcd.print("Erreur: Index invalide");
+        delay(2000);
     }
+    menuState = 0;
+    inputBuffer = "";
 }
 
 void sendAlertSMS(String message, String phoneNumber) {
-    sim800.println("AT+CMGF=1"); // Mode texte
-    delay(100);
-    sim800.println("AT+CMGS=\"" + phoneNumber + "\"");
-    delay(100);
-    sim800.print(message);
-    delay(100);
-    sim800.write(26); // CTRL+Z pour envoyer le message
-    delay(1000);
-    Serial.println("SMS envoyé à " + phoneNumber);
+    Serial.print("Tentative d'envoi SMS à "); Serial.print(phoneNumber); Serial.print(": "); Serial.println(message);
+    sim800.println("AT");
+    delay(500);
+    if (sim800.find("OK")) {
+        sim800.println("AT+CMGF=1");
+        delay(100);
+        sim800.println("AT+CMGS=\"" + phoneNumber + "\"");
+        delay(100);
+        sim800.print(message);
+        delay(100);
+        sim800.write(26);
+        delay(3000);
+        while(sim800.available()) {
+            Serial.write(sim800.read());
+        }
+        Serial.println("SMS envoyé à " + phoneNumber);
+    } else {
+        Serial.println("SIM800L non repondant. Verifier connexion.");
+    }
 }
 
 void readSensors() {
     voltage = capteur_tension.getRmsVoltage();
     current1 = capteur_courant1.getCurrentAC();
     current2 = capteur_courant2.getCurrentAC();
-    energy1 += current1 * voltage * TIME_INTERVAL;
-    energy2 += current2 * voltage * TIME_INTERVAL;
+    energy1_instant = (voltage * current1 * (energyInterval / 1000.0)) / 3600000.0;
+    energy2_instant = (voltage * current2 * (energyInterval / 1000.0)) / 3600000.0;
+    if (energy1_instant < 0) energy1_instant = 0;
+    if (energy2_instant < 0) energy2_instant = 0;
+    if (energy_user > 0) {
+        energy_user -= energy1_instant;
+        if (energy_user < 0) energy_user = 0;
+    }
+    if (energy_userr > 0) {
+        energy_userr -= energy2_instant;
+        if (energy_userr < 0) energy_userr = 0;
+    }
 }
 
 void manageRelays() {
-    // Relais 1
-    if (energy1 < SHUTDOWN_THRESHOLD) {
-        digitalWrite(RELAY_USER1, HIGH);
-        relay1Status = false;
+    if (energy_user <= SHUTDOWN_THRESHOLD) {
+        if (relay1Status == true) {
+            digitalWrite(RELAY1_PIN, HIGH);
+            relay1Status = false;
+            Serial.println("Relais 1 coupé : energy_user epuisee.");
+            sendAlertSMS("Energie Maison 1 epuisee. Relais coupe.", userPhoneNumbers[1]);
+            if(userCount > 0) sendAlertSMS("Energie Maison 1 epuisee. Relais coupe.", userPhoneNumbers[0]);
+            saveEnergyValuesToSPIFFS();
+        }
     } else {
-        digitalWrite(RELAY_USER1, LOW);
-        relay1Status = true;
+        if (relay1Status == false && energy_user > SHUTDOWN_THRESHOLD) {
+            // Pour réactivation automatique, décommenter la ligne suivante:
+            // digitalWrite(RELAY1_PIN, LOW);
+            // relay1Status = true;
+            // sendAlertSMS("Energie Maison 1 rechargée. Relais actif.", userPhoneNumbers[1]);
+        }
     }
-    // Relais 2
-    if (energy2 < SHUTDOWN_THRESHOLD) {
-        digitalWrite(RELAY_USER2, HIGH);
-        relay2Status = false;
+    if (energy_userr <= SHUTDOWN_THRESHOLD) {
+        if (relay2Status == true) {
+            digitalWrite(RELAY2_PIN, HIGH);
+            relay2Status = false;
+            Serial.println("Relais 2 coupé : energy_userr epuisee.");
+            sendAlertSMS("Energie Maison 2 epuisee. Relais coupe.", userPhoneNumbers[2]);
+            if(userCount > 0) sendAlertSMS("Energie Maison 2 epuisee. Relais coupe.", userPhoneNumbers[0]);
+            saveEnergyValuesToSPIFFS();
+        }
     } else {
-        digitalWrite(RELAY_USER2, LOW);
-        relay2Status = true;
+        if (relay2Status == false && energy_userr > SHUTDOWN_THRESHOLD) {
+            // Pour réactivation automatique, décommenter la ligne suivante:
+            // digitalWrite(RELAY2_PIN, LOW);
+            // relay2Status = true;
+            // sendAlertSMS("Energie Maison 2 rechargée. Relais actif.", userPhoneNumbers[2]);
+        }
     }
 }
 
 void scanWiFiNetworks() {
   Serial.println("\nScan des réseaux WiFi disponibles...");
   int n = WiFi.scanNetworks();
-  
   if (n == 0) {
     Serial.println("Aucun réseau trouvé!");
   } else {
     Serial.print(n);
     Serial.println(" réseaux trouvés:");
-    
     for (int i = 0; i < n; ++i) {
       Serial.print(i + 1);
       Serial.print(": ");
@@ -301,31 +430,21 @@ void connectToWiFi() {
   Serial.println("\n=== Configuration WiFi ===");
   Serial.print("SSID: ");
   Serial.println(ssid);
-  Serial.print("Password: ");
-  Serial.println(password);
-  
-  // Scanner les réseaux disponibles
   scanWiFiNetworks();
-  
-  // Configuration du mode WiFi
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(1000);
-  
   Serial.println("\nTentative de connexion...");
   lcd.clear();
   lcd.print("Connexion WiFi...");
-  
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < MAX_WIFI_RETRIES) {
+  const int MAX_WIFI_RETRIES_LOCAL = 3; // Limite à 3 tentatives
+  while (WiFi.status() != WL_CONNECTED && attempts < MAX_WIFI_RETRIES_LOCAL) {
     Serial.print("Tentative ");
     Serial.print(attempts + 1);
     Serial.print("/");
-    Serial.println(MAX_WIFI_RETRIES);
-    
+    Serial.println(MAX_WIFI_RETRIES_LOCAL);
     WiFi.begin(ssid, password);
-    
-    // Attendre la connexion avec un timeout
     int timeout = 0;
     while (WiFi.status() != WL_CONNECTED && timeout < 20) {
       delay(500);
@@ -333,78 +452,59 @@ void connectToWiFi() {
       timeout++;
     }
     Serial.println();
-    
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nWiFi connecté avec succès!");
       Serial.print("Adresse IP: ");
       Serial.println(WiFi.localIP());
-      Serial.print("Masque de sous-réseau: ");
-      Serial.println(WiFi.subnetMask());
-      Serial.print("Passerelle: ");
-      Serial.println(WiFi.gatewayIP());
-      Serial.print("DNS: ");
-      Serial.println(WiFi.dnsIP());
       Serial.print("Force du signal (RSSI): ");
       Serial.println(WiFi.RSSI());
-      
       lcd.clear();
       lcd.print("WiFi connecte");
       lcd.setCursor(0, 1);
       lcd.print(WiFi.localIP());
+      isOnline = true;
       return;
     }
-    
     attempts++;
-    if (attempts < MAX_WIFI_RETRIES) {
+    if (attempts < MAX_WIFI_RETRIES_LOCAL) {
       Serial.println("Échec de la connexion, nouvelle tentative...");
       lcd.clear();
       lcd.print("Tentative ");
       lcd.print(attempts + 1);
       lcd.print("/");
-      lcd.print(MAX_WIFI_RETRIES);
+      lcd.print(MAX_WIFI_RETRIES_LOCAL);
       delay(WIFI_RETRY_DELAY);
     }
   }
-  
+  // Si toujours pas connecté après 3 tentatives
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nÉchec de la connexion WiFi après plusieurs tentatives");
-    Serial.println("Vérifiez que:");
-    Serial.println("1. Le SSID est correct: " + String(ssid));
-    Serial.println("2. Le mot de passe est correct");
-    Serial.println("3. Le routeur est à portée");
-    Serial.println("4. Le routeur n'a pas de restrictions (filtrage MAC, etc.)");
-    
+    Serial.println("\nÉchec de la connexion WiFi après 3 tentatives");
     lcd.clear();
-    lcd.print("Erreur WiFi");
+    lcd.print("Mode Hors Ligne");
     lcd.setCursor(0, 1);
-    lcd.print("Verifiez config");
+    lcd.print("WiFi indisponible");
+    isOnline = false;
+    lastOfflineSave = millis(); // Pour forcer la sauvegarde hors ligne si besoin
   }
 }
 
 void sendDataToServer() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n=== Envoi des données au serveur ===");
-    Serial.println("État WiFi : Connecté");
-    Serial.print("Adresse IP : ");
-    Serial.println(WiFi.localIP());
-    Serial.print("Force du signal (RSSI) : ");
-    Serial.println(WiFi.RSSI());
-    
     int retryCount = 0;
     bool success = false;
-    
     while (!success && retryCount < MAX_API_RETRIES) {
-      HTTPClient http;
+      WiFiClientSecure client;
+      client.setInsecure(); // <-- Ajoute ceci pour ignorer le certificat (pas sécurisé)
+      HTTPClient https;
       Serial.println("\nTentative de connexion à l'API...");
+      String url = String(BASE_API_URL) + DATA_SEND_PATH;
       Serial.print("URL : ");
-      Serial.println(API_URL);
-      
-      http.begin(API_URL);
-      http.addHeader("Content-Type", "application/json");
-      http.addHeader("x-api-key", apiKey);
-      http.addHeader("Accept", "application/json");
-      
-      // Envoyer les données dans le format attendu par le backend
+      Serial.println(url);
+      https.begin(client, url);
+      https.addHeader("Content-Type", "application/json");
+      https.addHeader("x-api-key", apiKey);
+      https.addHeader("Accept", "application/json");
       StaticJsonDocument<1024> doc;
       doc["deviceId"] = deviceId;
       doc["voltage"] = voltage;
@@ -415,27 +515,22 @@ void sendDataToServer() {
       doc["relay1Status"] = relay1Status;
       doc["relay2Status"] = relay2Status;
       doc["timestamp"] = getTimestamp();
-      
       String jsonData;
       serializeJson(doc, jsonData);
-      
       Serial.println("\nDétails de la requête :");
       Serial.println("Headers :");
-      Serial.println("  Content-Type: application/json");
-      Serial.println("  x-api-key: " + String(apiKey));
-      Serial.println("  Accept: application/json");
+      Serial.println("   Content-Type: application/json");
+      Serial.println("   x-api-key: " + String(apiKey));
+      Serial.println("   Accept: application/json");
       Serial.println("Données envoyées :");
       Serial.println(jsonData);
-      
       Serial.println("\nEnvoi de la requête...");
-      int httpResponseCode = http.POST(jsonData);
-      
+      int httpResponseCode = https.POST(jsonData);
       if (httpResponseCode > 0) {
-        String response = http.getString();
+        String response = https.getString();
         Serial.println("\nRéponse du serveur :");
         Serial.println("Code : " + String(httpResponseCode));
         Serial.println("Contenu : " + response);
-        
         if (httpResponseCode == 200 || httpResponseCode == 201) {
           success = true;
           Serial.println("Données envoyées avec succès !");
@@ -447,27 +542,13 @@ void sendDataToServer() {
         } else {
           Serial.println("Erreur serveur : " + String(httpResponseCode));
           Serial.println("Réponse : " + response);
-          Serial.println("Détails de l'erreur :");
-          if (httpResponseCode == 401) {
-            Serial.println("Erreur d'authentification - Vérifiez la clé API");
-          } else if (httpResponseCode == 404) {
-            Serial.println("URL non trouvée - Vérifiez l'URL de l'API");
-          } else if (httpResponseCode == 500) {
-            Serial.println("Erreur serveur interne");
-          }
         }
       } else {
         Serial.println("\nErreur de connexion :");
         Serial.println("Code : " + String(httpResponseCode));
-        Serial.println("Erreur : " + http.errorToString(httpResponseCode));
-        Serial.println("Vérifiez que :");
-        Serial.println("1. L'URL de l'API est correcte");
-        Serial.println("2. Le serveur est en ligne");
-        Serial.println("3. Le port 30000 est ouvert");
+        Serial.println("Erreur : " + https.errorToString(httpResponseCode));
       }
-      
-      http.end();
-      
+      https.end();
       if (!success) {
         retryCount++;
         if (retryCount < MAX_API_RETRIES) {
@@ -484,14 +565,8 @@ void sendDataToServer() {
         }
       }
     }
-    
     if (!success) {
       Serial.println("\nÉchec de l'envoi des données après plusieurs tentatives");
-      Serial.println("Vérifiez que :");
-      Serial.println("1. L'URL de l'API est correcte : " + String(API_URL));
-      Serial.println("2. La clé API est valide : " + String(apiKey));
-      Serial.println("3. Le serveur est en ligne et accessible");
-      Serial.println("4. Le port 30000 est ouvert sur le serveur");
       lcd.clear();
       lcd.print("Erreur envoi");
       lcd.setCursor(0, 1);
@@ -499,8 +574,7 @@ void sendDataToServer() {
       saveEnergyValuesToSPIFFS();
     }
   } else {
-    Serial.println("\nPas de connexion WiFi");
-    Serial.println("Tentative de reconnexion...");
+    Serial.println("\nPas de connexion WiFi, tentative de reconnexion...");
     lcd.clear();
     lcd.print("Pas de WiFi");
     connectToWiFi();
@@ -510,19 +584,15 @@ void sendDataToServer() {
 void checkServerCommands() {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    String commandUrl = String(API_URL) + "/api/commands";
+    String commandUrl = String(BASE_API_URL) + COMMANDS_FETCH_PATH + "?deviceId=" + deviceId;
     http.begin(commandUrl);
     http.addHeader("x-api-key", apiKey);
-    
     int httpResponseCode = http.GET();
-    
     if (httpResponseCode == 200) {
       String payload = http.getString();
       Serial.println("Commandes reçues: " + payload);
-      
       StaticJsonDocument<512> doc;
       DeserializationError error = deserializeJson(doc, payload);
-      
       if (!error) {
         JsonArray commands = doc["commands"].as<JsonArray>();
         for (JsonObject command : commands) {
@@ -530,7 +600,13 @@ void checkServerCommands() {
           JsonObject parameters = command["parameters"] | JsonObject();
           processCommand(commandType.c_str(), parameters);
         }
+      } else {
+        Serial.print("Erreur de désérialisation JSON des commandes: ");
+        Serial.println(error.c_str());
       }
+    } else {
+      Serial.print("Erreur HTTP lors de la récupération des commandes: ");
+      Serial.println(httpResponseCode);
     }
     http.end();
   }
@@ -539,55 +615,116 @@ void checkServerCommands() {
 void processCommand(const char* commandType, const JsonObject& parameters) {
   if (strcmp(commandType, "recharge_energy") == 0) {
     float energyAmount = parameters["energy_amount"] | 0.0;
-    Serial.print("Montant de la recharge: ");
-    Serial.println(energyAmount);
-    
-    if (strcmp(deviceId, "esp32_maison1") == 0) {
+    int targetUser = parameters["user_id"] | 0;
+    Serial.print("Commande de recharge reçue: ");
+    Serial.print(energyAmount);
+    Serial.print(" kWh pour Maison ");
+    Serial.println(targetUser);
+    if (targetUser == 1) {
       energy_user += energyAmount;
-      energy1 = energy_user;
       Serial.print("Nouvelle énergie maison 1: ");
       Serial.println(energy_user);
+      lcd.clear();
+      lcd.print("M1 Recharged: ");
+      lcd.print(energyAmount);
+      lcd.print(" kWh");
+      lcd.setCursor(0,1);
+      lcd.print("Total: ");
+      lcd.print(energy_user, 1);
+      delay(3000);
       saveEnergyValuesToSPIFFS();
-    } else if (strcmp(deviceId, "esp32_maison2") == 0) {
+      if(energy_user > SHUTDOWN_THRESHOLD && !relay1Status) {
+        digitalWrite(RELAY1_PIN, LOW);
+        relay1Status = true;
+        Serial.println("Relais 1 réactivé par commande.");
+        sendAlertSMS("Energie Maison 1 rechargée. Relais actif par commande.", userPhoneNumbers[1]);
+      }
+    } else if (targetUser == 2) {
       energy_userr += energyAmount;
-      energy2 = energy_userr;
       Serial.print("Nouvelle énergie maison 2: ");
       Serial.println(energy_userr);
+      lcd.clear();
+      lcd.print("M2 Recharged: ");
+      lcd.print(energyAmount);
+      lcd.print(" kWh");
+      lcd.setCursor(0,1);
+      lcd.print("Total: ");
+      lcd.print(energy_userr, 1);
+      delay(3000);
       saveEnergyValuesToSPIFFS();
+      if(energy_userr > SHUTDOWN_THRESHOLD && !relay2Status) {
+        digitalWrite(RELAY2_PIN, LOW);
+        relay2Status = true;
+        Serial.println("Relais 2 réactivé par commande.");
+        sendAlertSMS("Energie Maison 2 rechargée. Relais actif par commande.", userPhoneNumbers[2]);
+      }
+    } else {
+        Serial.println("Commande de recharge reçue pour un utilisateur inconnu.");
+    }
+  } else if (strcmp(commandType, "set_relay_status") == 0) {
+    int targetUser = parameters["user_id"] | 0;
+    bool status = parameters["status"] | false;
+    Serial.print("Commande relais reçue pour Maison ");
+    Serial.print(targetUser);
+    Serial.print(": ");
+    Serial.println(status ? "ON" : "OFF");
+    if (targetUser == 1) {
+      digitalWrite(RELAY1_PIN, status ? LOW : HIGH);
+      relay1Status = status;
+      lcd.clear();
+      lcd.print("R1: ");
+      lcd.print(status ? "ON " : "OFF");
+      delay(2000);
+      saveEnergyValuesToSPIFFS();
+    } else if (targetUser == 2) {
+      digitalWrite(RELAY2_PIN, status ? LOW : HIGH);
+      relay2Status = status;
+      lcd.clear();
+      lcd.print("R2: ");
+      lcd.print(status ? "ON" : "OFF");
+      delay(2000);
+      saveEnergyValuesToSPIFFS();
+    } else {
+        Serial.println("Commande relais reçue pour un utilisateur inconnu.");
     }
   }
+}
+
+String getTimestamp() {
+  time_t now;
+  struct tm timeinfo;
+  time(&now);
+  localtime_r(&now, &timeinfo);
+  char buffer[20];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+  return String(buffer);
 }
 
 void updateLCD() {
     if (menuState == 0) {
         lcd.clear();
-        
-        // Ligne 1: État de la connexion
         lcd.setCursor(0, 0);
         lcd.print(isOnline ? "En ligne" : "Hors ligne");
-        
-        // Ligne 2: Maison 1
+        lcd.setCursor(10, 0);
+        String ts = getTimestamp();
+        if (ts.length() >= 16) {
+          lcd.print(ts.substring(11, 16));
+        }
         lcd.setCursor(0, 1);
         lcd.print("M1: ");
-        lcd.print(current1, 1);
-        lcd.print("A ");
-        lcd.print(energy_user, 1);
-        lcd.print("kWh");
-        
-        // Ligne 3: Maison 2
+        if (energy_user < 1000.0) lcd.print(energy_user, 1);
+        else lcd.print((int)energy_user);
+        lcd.print(" kWh");
         lcd.setCursor(0, 2);
         lcd.print("M2: ");
-        lcd.print(current2, 1);
-        lcd.print("A ");
-        lcd.print(energy_userr, 1);
-        lcd.print("kWh");
-        
-        // Ligne 4: État des relais
+        if (energy_userr < 1000.0) lcd.print(energy_userr, 1);
+        else lcd.print((int)energy_userr);
+        lcd.print(" kWh");
         lcd.setCursor(0, 3);
         lcd.print("R1:");
         lcd.print(relay1Status ? "ON " : "OFF");
         lcd.print(" R2:");
-        lcd.print(relay2Status ? "ON" : "OFF");
+        lcd.print(relay2Status ? "ON " : "OFF");
     }
 }
 
@@ -596,21 +733,113 @@ void handleKeypadInput() {
     if (key) {
         Serial.print("Touche pressée : ");
         Serial.println(key);
-        
+        if (isPasswordMode) {
+            handlePasswordInput(key);
+            return;
+        }
         switch(menuState) {
-            case 0: // Mode affichage normal
-                if (key == 'M') { // M pour Menu
+            case 0:
+                if (key == 'M') {
                     menuState = 1;
                     showMainMenu();
                 }
+                else if (key == '1') {
+                    previousMenuBeforePassword = 2;
+                    enterPasswordMode();
+                }
+                else if (key == '2') {
+                    previousMenuBeforePassword = 3;
+                    enterPasswordMode();
+                }
                 break;
-                
-            case 1: // Menu principal
+            case 1:
                 handleMainMenu(key);
                 break;
-                
-            case 2: // Sous-menu
-                handleSubMenu(key);
+            case 2:
+                if (key >= '0' && key <= '9' || key == '.') {
+                    inputBuffer += key;
+                    lcd.setCursor(0,2);
+                    lcd.print("                   ");
+                    lcd.setCursor(0,2);
+                    lcd.print(inputBuffer);
+                } else if (key == 'A') {
+                    float rechargeAmount = inputBuffer.toFloat();
+                    if (rechargeAmount > 0) {
+                        energy_user += rechargeAmount;
+                        saveEnergyValuesToSPIFFS();
+                        lcd.clear();
+                        lcd.print("M1 Recharged:");
+                        lcd.setCursor(0,1);
+                        lcd.print(rechargeAmount, 1);
+                        lcd.print(" kWh. New Total:");
+                        lcd.setCursor(0,2);
+                        lcd.print(energy_user, 1);
+                        lcd.print(" kWh");
+                        if (!relay1Status && energy_user > SHUTDOWN_THRESHOLD) {
+                          digitalWrite(RELAY1_PIN, LOW);
+                          relay1Status = true;
+                          lcd.setCursor(0,3);
+                          lcd.print("Relais 1 Actif");
+                          sendAlertSMS("Energie Maison 1 rechargée de " + String(rechargeAmount,1) + " kWh. Relais actif. Nouveau solde: " + String(energy_user,1) + " kWh.", userPhoneNumbers[1]);
+                        }
+                    } else {
+                        lcd.clear();
+                        lcd.print("Valide: > 0");
+                    }
+                    delay(2000);
+                    inputBuffer = "";
+                    menuState = 0;
+                } else if (key == 'D') {
+                    inputBuffer = "";
+                    menuState = 0;
+                    updateLCD();
+                }
+                break;
+            case 3:
+                if (key >= '0' && key <= '9' || key == '.') {
+                    inputBuffer += key;
+                    lcd.setCursor(0,2);
+                    lcd.print("                   ");
+                    lcd.setCursor(0,2);
+                    lcd.print(inputBuffer);
+                } else if (key == 'A') {
+                    float rechargeAmount = inputBuffer.toFloat();
+                    if (rechargeAmount > 0) {
+                        energy_userr += rechargeAmount;
+                        saveEnergyValuesToSPIFFS();
+                        lcd.clear();
+                        lcd.print("M2 Recharged:");
+                        lcd.setCursor(0,1);
+                        lcd.print(rechargeAmount, 1);
+                        lcd.print(" kWh. New Total:");
+                        lcd.setCursor(0,2);
+                        lcd.print(energy_userr, 1);
+                        lcd.print(" kWh");
+                        if (!relay2Status && energy_userr > SHUTDOWN_THRESHOLD) {
+                          digitalWrite(RELAY2_PIN, LOW);
+                          relay2Status = true;
+                          lcd.setCursor(0,3);
+                          lcd.print("Relais 2 Actif");
+                          sendAlertSMS("Energie Maison 2 rechargée de " + String(rechargeAmount,1) + " kWh. Relais actif. Nouveau solde: " + String(energy_userr,1) + " kWh.", userPhoneNumbers[2]);
+                        }
+                    } else {
+                        lcd.clear();
+                        lcd.print("Valide: > 0");
+                    }
+                    delay(2000);
+                    inputBuffer = "";
+                    menuState = 0;
+                } else if (key == 'D') {
+                    inputBuffer = "";
+                    menuState = 0;
+                    updateLCD();
+                }
+                break;
+            case 4:
+                handleRelayMenu(key);
+                break;
+            case 5:
+                handleConfigPhoneMenu(key);
                 break;
         }
     }
@@ -618,341 +847,216 @@ void handleKeypadInput() {
 
 void showMainMenu() {
     lcd.clear();
-    lcd.print("1: Energie");
-    lcd.setCursor(0, 1);
-    lcd.print("2: Relais");
-    lcd.setCursor(0, 2);
-    lcd.print("3: Config");
-    lcd.setCursor(0, 3);
-    lcd.print("E: Retour");
+    lcd.setCursor(0,0); lcd.print("--- Menu Principal ---");
+    lcd.setCursor(0,1); lcd.print("1. Recharge M1");
+    lcd.setCursor(0,2); lcd.print("2. Recharge M2");
+    lcd.setCursor(0,3); lcd.print("3. Gerer Relais");
 }
 
 void handleMainMenu(char key) {
-    switch(key) {
-        case '1':
-            menuState = 2;
-            currentMenu = 1;
-            showEnergyMenu();
-            break;
-        case '2':
-            menuState = 2;
-            currentMenu = 2;
-            showRelayMenu();
-            break;
-        case '3':
-            menuState = 2;
-            currentMenu = 3;
-            showConfigMenu();
-            break;
-        case 'E':
-            menuState = 0;
-            currentMenu = 0;
-            updateLCD();
-            break;
+    if (key == '1') {
+        previousMenuBeforePassword = 2;
+        enterPasswordMode();
+    } else if (key == '2') {
+        previousMenuBeforePassword = 3;
+        enterPasswordMode();
+    } else if (key == '3') {
+        previousMenuBeforePassword = 4;
+        enterPasswordMode();
+    } else if (key == '4') {
+        previousMenuBeforePassword = 5;
+        enterPasswordMode();
+    } else if (key == 'D') {
+        menuState = 0;
+        updateLCD();
     }
-}
-
-void showEnergyMenu() {
-    lcd.clear();
-    lcd.print("Energie");
-    lcd.setCursor(0, 1);
-    lcd.print("1: M1: ");
-    lcd.print(energy_user);
-    lcd.setCursor(0, 2);
-    lcd.print("2: M2: ");
-    lcd.print(energy_userr);
-    lcd.setCursor(0, 3);
-    lcd.print("E: Retour");
 }
 
 void showRelayMenu() {
     lcd.clear();
-    lcd.print("Controle Relais");
-    lcd.setCursor(0, 1);
-    lcd.print("1: R1: ");
-    lcd.print(relay1Status ? "ON" : "OFF");
-    lcd.setCursor(0, 2);
-    lcd.print("2: R2: ");
-    lcd.print(relay2Status ? "ON" : "OFF");
-    lcd.setCursor(0, 3);
-    lcd.print("E: Retour");
+    lcd.setCursor(0,0); lcd.print("-- Gerer Relais --");
+    lcd.setCursor(0,1); lcd.print("1. R1 ON/OFF");
+    lcd.setCursor(0,2); lcd.print("2. R2 ON/OFF");
+    lcd.setCursor(0,3); lcd.print("D. Retour");
 }
 
-void showConfigMenu() {
-    lcd.clear();
-    lcd.print("Configuration");
-    lcd.setCursor(0, 1);
-    lcd.print("1: WiFi");
-    lcd.setCursor(0, 2);
-    lcd.print("2: Reset");
-    lcd.setCursor(0, 3);
-    lcd.print("E: Retour");
-}
-
-void handleSubMenu(char key) {
-    switch(key) {
-        case '1':
-            if (menuState == 2) {
-                if (isEnergyMenu()) {
-                    energy_user += 1.0;
-                    saveEnergyValuesToSPIFFS();
-                    lcd.clear();
-                    lcd.print("Recharge +1.0 kWh");
-                    lcd.setCursor(0, 1);
-                    lcd.print("Total: ");
-                    lcd.print(energy_user);
-                    lcd.print(" kWh");
-                    delay(2000);
-                } else if (isRelayMenu()) {
-                    relay1Status = !relay1Status;
-                    digitalWrite(RELAY_USER1, relay1Status ? LOW : HIGH);
-                } else if (isConfigMenu()) {
-                    connectToWiFi();
-                }
-            }
-            break;
-        case '2':
-            if (menuState == 2) {
-                if (isEnergyMenu()) {
-                    energy_userr += 1.0;
-                    saveEnergyValuesToSPIFFS();
-                    lcd.clear();
-                    lcd.print("Recharge +1.0 kWh");
-                    lcd.setCursor(0, 1);
-                    lcd.print("Total: ");
-                    lcd.print(energy_userr);
-                    lcd.print(" kWh");
-                    delay(2000);
-                } else if (isRelayMenu()) {
-                    relay2Status = !relay2Status;
-                    digitalWrite(RELAY_USER2, relay2Status ? LOW : HIGH);
-                } else if (isConfigMenu()) {
-                    ESP.restart();
-                }
-            }
-            break;
-        case 'E':
-            menuState = 1;
-            currentMenu = 0;
-            showMainMenu();
-            break;
+void handleRelayMenu(char key) {
+    if (key == '1') {
+        relay1Status = !relay1Status;
+        digitalWrite(RELAY1_PIN, relay1Status ? LOW : HIGH);
+        saveEnergyValuesToSPIFFS();
+        lcd.clear();
+        lcd.print("Relais 1: "); lcd.print(relay1Status ? "ON" : "OFF");
+        delay(1500);
+        showRelayMenu();
+    } else if (key == '2') {
+        relay2Status = !relay2Status;
+        digitalWrite(RELAY2_PIN, relay2Status ? LOW : HIGH);
+        saveEnergyValuesToSPIFFS();
+        lcd.clear();
+        lcd.print("Relais 2: "); lcd.print(relay2Status ? "ON" : "OFF");
+        delay(1500);
+        showRelayMenu();
+    } else if (key == 'D') {
+        menuState = 1;
+        showMainMenu();
     }
 }
 
-bool isEnergyMenu() {
-    return currentMenu == 1;
+void showConfigPhoneMenu() {
+    lcd.clear();
+    lcd.setCursor(0,0); lcd.print("-- Config Numeros --");
+    lcd.setCursor(0,1); lcd.print("1. Owner: "); lcd.print(userPhoneNumbers[0]);
+    lcd.setCursor(0,2); lcd.print("2. M1: "); lcd.print(userPhoneNumbers[1]);
+    lcd.setCursor(0,3); lcd.print("3. M2: "); lcd.print(userPhoneNumbers[2]);
 }
 
-bool isRelayMenu() {
-    return currentMenu == 2;
+void handleConfigPhoneMenu(char key) {
+    if (key >= '1' && key <= '3') {
+        int userIndex = key - '1';
+        lcd.clear();
+        lcd.print("New Num for User "); lcd.print(userIndex);
+        lcd.setCursor(0,1); lcd.print("Entrez N° (A=OK, D=Annuler):");
+        lcd.setCursor(0,2); lcd.print(inputBuffer);
+        menuState = 6 + userIndex;
+        inputBuffer = "";
+    } else if (key == 'D') {
+        menuState = 1;
+        showMainMenu();
+    }
 }
 
-bool isConfigMenu() {
-    return currentMenu == 3;
+void enterPasswordMode() {
+    isPasswordMode = true;
+    enteredPassword = "";
+    lcd.clear();
+    lcd.setCursor(0,0); lcd.print("Entrez mot de passe:");
+    lcd.setCursor(0,1); lcd.print("PIN: ");
+    lcd.setCursor(5,1); lcd.print("____");
+}
+
+void handlePasswordInput(char key) {
+    if (key >= '0' && key <= '9' && enteredPassword.length() < 4) {
+        enteredPassword += key;
+        lcd.setCursor(5,1);
+        for (int i = 0; i < enteredPassword.length(); i++) {
+            lcd.print("*");
+        }
+        for (int i = enteredPassword.length(); i < 4; i++) {
+            lcd.print("_");
+        }
+    } else if (key == 'A') {
+        if (enteredPassword.length() == 4) {
+            verifyPassword();
+        } else {
+            lcd.setCursor(0,2);
+            lcd.print("PIN incomplet !");
+            delay(1000);
+            lcd.setCursor(0,2);
+            lcd.print("                ");
+            lcd.setCursor(5,1);
+            for (int i = 0; i < enteredPassword.length(); i++) {
+                lcd.print("*");
+            }
+            for (int i = enteredPassword.length(); i < 4; i++) {
+                lcd.print("_");
+            }
+        }
+    } else if (key == 'D') {
+        clearPassword();
+        isPasswordMode = false;
+        menuState = 0;
+        updateLCD();
+    }
+}
+
+void clearPassword() {
+    enteredPassword = "";
+    lcd.setCursor(5,1);
+    lcd.print("____");
+}
+
+void verifyPassword() {
+    isPasswordMode = false;
+    if (enteredPassword == ownerPassword) {
+        lcd.clear();
+        lcd.print("Acces accorde!");
+        delay(1000);
+        if (previousMenuBeforePassword == 2) {
+            menuState = 2;
+            lcd.clear();
+            lcd.print("M1: Solde actuel:");
+            lcd.setCursor(0,1);
+            lcd.print(energy_user, 1);
+            lcd.print(" kWh");
+            lcd.setCursor(0,2);
+            lcd.print("Saisir recharge (kWh):");
+        } else if (previousMenuBeforePassword == 3) {
+            menuState = 3;
+            lcd.clear();
+            lcd.print("M2: Solde actuel:");
+            lcd.setCursor(0,1);
+            lcd.print(energy_userr, 1);
+            lcd.print(" kWh");
+            lcd.setCursor(0,2);
+            lcd.print("Saisir recharge (kWh):");
+        } else if (previousMenuBeforePassword == 4) {
+            menuState = 4;
+            showRelayMenu();
+        } else if (previousMenuBeforePassword == 5) {
+            menuState = 5;
+            showConfigPhoneMenu();
+        }
+    } else {
+        lcd.clear();
+        lcd.print("Mot de passe incorrect!");
+        delay(1500);
+        menuState = 0;
+    }
+    clearPassword();
+    updateLCD();
 }
 
 void checkWiFiConnection() {
-  if (WiFi.status() != WL_CONNECTED) {
-    if (isOnline) {
-      Serial.println("Connexion WiFi perdue");
-      isOnline = false;
-      lcd.clear();
-      lcd.print("Connexion perdue");
-      lcd.setCursor(0, 1);
-      lcd.print("Mode hors ligne");
-      delay(2000);
-    }
-    // Tenter de se reconnecter toutes les 30 secondes
-    static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 30000) {
-      lastReconnectAttempt = millis();
-      connectToWiFi();
-    }
-  } else if (!isOnline) {
-    Serial.println("Connexion WiFi rétablie");
-    isOnline = true;
+  if (WiFi.status() != WL_CONNECTED && isOnline) {
+    Serial.println("WiFi déconnecté. Tentative de reconnexion...");
     lcd.clear();
-    lcd.print("Connexion retablie");
-    delay(2000);
+    lcd.print("WiFi Deconnecte!");
+    isOnline = false;
+    connectToWiFi();
+  } else if (WiFi.status() == WL_CONNECTED && !isOnline) {
+    Serial.println("WiFi rétabli.");
+    lcd.clear();
+    lcd.print("WiFi Reconnecte!");
+    isOnline = true;
+    delay(1000);
+    updateLCD();
   }
 }
 
 void saveOfflineData() {
-  if (!isOnline && millis() - lastOfflineSave > OFFLINE_SAVE_INTERVAL) {
-    Serial.println("Sauvegarde des données hors ligne...");
-    saveEnergyValuesToSPIFFS();
-    lastOfflineSave = millis();
-  }
-}
-
-void setup() {
-  Wire.begin();
-  Serial.begin(115200);
-  delay(1000); // Attendre que le port série soit prêt
-  
-  Serial.println("\n=== Démarrage du système ===");
-  
-  // Initialisation de l'écran LCD
-  lcd.begin();
-  lcd.backlight();
+  Serial.println("Sauvegarde des données en mode hors ligne...");
+  saveEnergyValuesToSPIFFS();
   lcd.clear();
-  lcd.print("Demarrage...");
-  delay(1000);
-  
-  // Connexion WiFi
-  connectToWiFi();
-  
-  if (!SPIFFS.begin(true)) {
-        Serial.println("Erreur : SPIFFS non initialisé.");
-        return;
-    }
-
-    Serial.println("SPIFFS initialisé avec succès.");
-
-    // Charger les numéros de téléphone depuis SPIFFS
-    loadPhoneNumbersFromSPIFFS();
-
-    // Charger les données d'énergie depuis SPIFFS
-    loadEnergyValuesFromSPIFFS();
-
-    // Autres initialisations...
-    pinMode(RELAY_USER1, OUTPUT);
-    pinMode(RELAY_USER2, OUTPUT);
-    pinMode(RELAY_USER, OUTPUT);
-    digitalWrite(RELAY_USER1, HIGH);
-    digitalWrite(RELAY_USER2, HIGH);
-    digitalWrite(RELAY_USER, LOW);
-
-    // Initialisation des capteurs
-    capteur_tension.setSensitivity(500.0f);
-    capteur_courant1.calibrate();
-    capteur_courant2.calibrate();
-
-    Serial.println("Test du clavier 4x4");
-}
-
-void loop() {
-  checkWiFiConnection();
-  checkAlerts();
-  
-  if(v < 10000000) {
-    v = v + 1;
-  }
-  if(v > 1000000) {
-    v = 0;
-  }
-  
-  // Lecture des capteurs
-  voltage = capteur_tension.getRmsVoltage();
-  current1 = capteur_courant1.getCurrentAC();
-  current2 = capteur_courant2.getCurrentAC();
-  
-  // Calcul de l'énergie
-  energy1 = voltage * current1 * (energyInterval / 3600000.0);
-  energy2 = voltage * current2 * (energyInterval / 3600000.0);
-  
-  // Mise à jour de l'énergie des utilisateurs
-  if((v % 2) == 0 && v > 0) {
-    if(energy_user > 0) {
-      energy_user = energy_user - energy1;
-    }
-    if(energy_userr > 0) {
-      energy_userr = energy_userr - energy2;
-    }
-  }
-  
-  // Contrôle des relais
-  if(energy_user <= 0) {
-    energy_user = 0;
-    digitalWrite(RELAY_USER1, HIGH);
-  } else {
-    digitalWrite(RELAY_USER1, LOW);
-  }
-  
-  if(energy_userr <= 0) {
-    energy_userr = 0;
-    digitalWrite(RELAY_USER2, HIGH);
-  } else {
-    digitalWrite(RELAY_USER2, LOW);
-  }
-  
-  // Envoi des données
-  if(isOnline) {
-    if(millis() - lastEnergCUpdate >= energCUpdateInterval) {
-      Serial.println("\n=== Intervalle d'envoi atteint ===");
-      sendDataToServer();
-      lastEnergCUpdate = millis();
-    }
-    
-    // Vérifier les commandes toutes les minutes
-    if (millis() - lastCommandCheckTime >= 60000) {
-      checkServerCommands();
-      lastCommandCheckTime = millis();
-    }
-  } else {
-    saveOfflineData();
-  }
-  
-  handleKeypadInput();
-  updateLCD();
-  delay(1000);
-}
-
-String getTimestamp() {
-    // Format: "2024-03-14T12:00:00Z"
-    time_t now;
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        Serial.println("Échec de l'obtention du temps");
-        return "2024-03-14T12:00:00Z";
-    }
-    time(&now);
-    char timeStringBuff[50];
-    strftime(timeStringBuff, sizeof(timeStringBuff), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
-    return String(timeStringBuff);
+  lcd.print("Donnees Sauvegardees");
+  lcd.setCursor(0,1);
+  lcd.print("Mode Hors Ligne");
+  delay(1500);
 }
 
 void checkAlerts() {
-  // Vérifier les seuils d'alerte pour la maison 1
-  if (energy_user <= ALERT_THRESHOLD && !maison1AlertSent) {
-    sendAlertSMS("Alerte : Énergie faible pour Maison 1", userPhoneNumbers[1]);
-    maison1AlertSent = true;
-  } else if (energy_user > ALERT_THRESHOLD) {
-    maison1AlertSent = false;
-  }
-
-  // Vérifier les seuils d'alerte pour la maison 2
-  if (energy_userr <= ALERT_THRESHOLD && !maison2AlertSent) {
-    sendAlertSMS("Alerte : Énergie faible pour Maison 2", userPhoneNumbers[2]);
-    maison2AlertSent = true;
-  } else if (energy_userr > ALERT_THRESHOLD) {
-    maison2AlertSent = false;
-  }
-
-  // Vérifier les seuils de coupure
-  if (energy_user <= SHUTDOWN_THRESHOLD && !maison1ShutdownSent) {
-    sendAlertSMS("Coupure : Énergie épuisée pour Maison 1", userPhoneNumbers[0]);
-    maison1ShutdownSent = true;
-  } else if (energy_user > SHUTDOWN_THRESHOLD) {
-    maison1ShutdownSent = false;
-  }
-
-  if (energy_userr <= SHUTDOWN_THRESHOLD && !maison2ShutdownSent) {
-    sendAlertSMS("Coupure : Énergie épuisée pour Maison 2", userPhoneNumbers[0]);
-    maison2ShutdownSent = true;
-  } else if (energy_userr > SHUTDOWN_THRESHOLD) {
-    maison2ShutdownSent = false;
-  }
-}
-
-void checkServerConnection() {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(API_URL);
-    int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK) {
-      Serial.println("4. Le port 30000 est ouvert sur le serveur");
+    if (energy_user <= ALERT_THRESHOLD && energy_user > SHUTDOWN_THRESHOLD && !maison1AlertSent) {
+        sendAlertSMS("ATTENTION: Energie Maison 1 faible (" + String(energy_user, 1) + " kWh).", userPhoneNumbers[1]);
+        if(userCount > 0) sendAlertSMS("ATTENTION: Energie Maison 1 faible (" + String(energy_user, 1) + " kWh).", userPhoneNumbers[0]);
+        maison1AlertSent = true;
+    } else if (energy_user > ALERT_THRESHOLD && maison1AlertSent) {
+        maison1AlertSent = false;
     }
-    http.end();
-  }
+    if (energy_userr <= ALERT_THRESHOLD && energy_userr > SHUTDOWN_THRESHOLD && !maison2AlertSent) {
+        sendAlertSMS("ATTENTION: Energie Maison 2 faible (" + String(energy_userr, 1) + " kWh).", userPhoneNumbers[2]);
+        if(userCount > 0) sendAlertSMS("ATTENTION: Energie Maison 2 faible (" + String(energy_userr, 1) + " kWh).", userPhoneNumbers[0]);
+        maison2AlertSent = true;
+    } else if (energy_userr > ALERT_THRESHOLD && maison2AlertSent) {
+        maison2AlertSent = false;
+    }
 }

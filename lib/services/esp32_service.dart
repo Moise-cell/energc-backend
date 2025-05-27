@@ -353,7 +353,7 @@ class ESP32Service extends ChangeNotifier {
   // Méthode pour obtenir les données actuelles d'une maison
   Future<DeviceData?> getCurrentData(String deviceId) async {
     try {
-      final url = Uri.parse('${baseUrl}/api/data/${deviceId}/latest');
+      final url = Uri.parse('$baseUrl/api/data/$deviceId/latest');
       _logger.i('Requête des données pour $deviceId', error: url.toString());
 
       final response = await http
@@ -511,7 +511,7 @@ class ESP32Service extends ChangeNotifier {
 
   Future<bool> checkESP32Connection(String deviceId) async {
     try {
-      final url = Uri.parse('${baseUrl}/api/data/$deviceId/latest');
+      final url = Uri.parse('$baseUrl/api/data/$deviceId/latest');
       _logger.i('Tentative de connexion à:', error: url.toString());
 
       final client = http.Client();

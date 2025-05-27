@@ -1,5 +1,3 @@
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-
 /// Configuration des API utilisées dans l'application
 class ApiConfig {
   /// URL de base de l'API
