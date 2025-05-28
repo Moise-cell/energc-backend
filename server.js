@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const { Pool } = require('pg');
+const { v4: uuidv4 } = require('uuid'); // <-- NOUVEL IMPORT : pour générer des UUIDs
 const app = express();
 const PORT = process.env.PORT || 30000;
 const API_KEY = process.env.API_KEY || 'esp32_secret_key';
@@ -108,7 +109,7 @@ app.get('/api/commands', checkApiKey, (req, res) => {
   res.json(commands);
 });
 
-// Endpoint pour ajouter une commande de recharge
+// Endpoint pour ajouter une commande (Modifié pour ajouter un ID UUID)
 app.post('/api/commands', checkApiKey, async (req, res) => {
   try {
     console.log('Headers reçus:', req.headers);
@@ -152,6 +153,7 @@ app.post('/api/commands', checkApiKey, async (req, res) => {
     
     const commands = loadCommands();
     const newCommand = {
+      id: uuidv4(), // <--- AJOUT IMPORTANT : Génère un UUID unique pour la commande
       device_id,
       command_type,
       parameters: parameters || {},
@@ -164,6 +166,7 @@ app.post('/api/commands', checkApiKey, async (req, res) => {
     commands.commands.push(newCommand);
     saveCommands(commands);
     
+    // Retourne la commande complète, y compris l'ID généré
     res.status(201).json(newCommand);
   } catch (error) {
     console.error('Erreur lors de l\'ajout de la commande:', error);
@@ -171,14 +174,15 @@ app.post('/api/commands', checkApiKey, async (req, res) => {
   }
 });
 
-// Endpoint pour confirmer l'exécution d'une commande
+// Endpoint pour confirmer l'exécution d'une commande (Modifié pour utiliser l'ID UUID)
 app.post('/api/commands/confirm', checkApiKey, (req, res) => {
   try {
-    const { device_id, command_id } = req.body;
+    const { device_id, command_id } = req.body; // command_id est maintenant l'UUID
     const commands = loadCommands();
     
-    const command = commands.commands.find(cmd => 
-      cmd.device_id === device_id && cmd.timestamp === command_id
+    // <--- MODIFICATION IMPORTANTE : Recherche la commande par son 'id' unique, pas le 'timestamp'
+    const command = commands.commands.find(cmd =>
+      cmd.device_id === device_id && cmd.id === command_id
     );
     
     if (command) {
@@ -199,7 +203,7 @@ app.post('/api/data', checkApiKey, async (req, res) => {
   // Accepte energy OU energy1/energy2
   const { deviceId, voltage, current1, current2, energy, energy1, energy2, relay1Status, relay2Status, timestamp } = req.body;
 
-  // Validation : au moins deviceId et une valeur d'énergie
+  // Validation : au moins deviceId et une valeur d'énergie
   if (!deviceId || typeof voltage !== 'number' || typeof current1 !== 'number' || typeof current2 !== 'number') {
     return res.status(400).json({ error: 'Données invalides', message: 'Champs obligatoires manquants.' });
   }
@@ -287,7 +291,8 @@ app.post('/api/login', checkApiKey, async (req, res) => {
 // Gestion des erreurs globales
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Erreur serveur' });
+  res.status(
+    500).json({ error: 'Erreur serveur' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {

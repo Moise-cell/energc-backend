@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
-import 'dart:convert';
 import 'dart:async';
-import 'package:http/http.dart' as http;
 import 'package:energc/models/device_data.dart';
 import '../services/database_service.dart';
 import '../services/esp32_service.dart';
-import '../config/api_config.dart';
 import 'package:logger/logger.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+// Les imports suivants sont commentés car ils ne sont pas nécessaires
+// pour la logique de base de l'EnergyProvider si fetchSensorData est inutilisée ou réécrite.
+// import 'dart:convert';
+// import 'package:http/http.dart' as http;
+// import '../config/api_config.dart';
+// import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class EnergyProvider extends ChangeNotifier {
   DeviceData? maison1Data;
@@ -74,13 +76,13 @@ class EnergyProvider extends ChangeNotifier {
       await _esp32Service.initialize();
 
       // Récupérer les données initiales
-      await refreshData();
+      await refreshData(); // Appel initial pour remplir les données
 
-      // Mise à jour toutes les 3 minutes
+      // Mise à jour toutes les 3 minutes (180 secondes)
       _updateTimer?.cancel();
       _updateTimer = Timer.periodic(const Duration(seconds: 180), (_) {
         if (_isInitialized) {
-          refreshData();
+          refreshData(); // Appel périodique
         }
       });
 
@@ -126,7 +128,8 @@ class EnergyProvider extends ChangeNotifier {
             error: newMaison1Data.toJson(),
           );
           maison1Data = newMaison1Data;
-          await _databaseService.saveDeviceData(newMaison1Data);
+          // LIGNE SUPPRIMÉE : Flutter ne doit PAS ré-écrire les données de mesure.
+          // await _databaseService.saveDeviceData(newMaison1Data);
         } else {
           _logger.w('Aucune donnée reçue pour maison1');
         }
@@ -149,7 +152,8 @@ class EnergyProvider extends ChangeNotifier {
             error: newMaison2Data.toJson(),
           );
           maison2Data = newMaison2Data;
-          await _databaseService.saveDeviceData(newMaison2Data);
+          // LIGNE SUPPRIMÉE : Flutter ne doit PAS ré-écrire les données de mesure.
+          // await _databaseService.saveDeviceData(newMaison2Data);
         } else {
           _logger.w('Aucune donnée reçue pour maison2');
         }
@@ -167,7 +171,7 @@ class EnergyProvider extends ChangeNotifier {
 
       _logger.i('Mise à jour des données terminée');
       _isLoadingData = false;
-      notifyListeners();
+      notifyListeners(); // Informe les widgets qu'une mise à jour est disponible
     } catch (e, stack) {
       _logger.e(
         'Erreur lors de la mise à jour des données',
@@ -182,6 +186,8 @@ class EnergyProvider extends ChangeNotifier {
 
   Future<void> _processPendingCommandsSafely() async {
     try {
+      // Récupère les commandes en attente pour maison1. Vous pourriez avoir besoin
+      // d'adapter cela pour récupérer les commandes pour les deux maisons si nécessaire.
       final commands = await _databaseService.getPendingCommands(
         'esp32_maison1',
       );
@@ -206,7 +212,7 @@ class EnergyProvider extends ChangeNotifier {
         relayNumber: relayNumber,
         status: status,
       );
-      await refreshData();
+      await refreshData(); // Rafraîchir les données après le contrôle pour voir l'état mis à jour
     } catch (e) {
       _logger.e('Erreur lors du contrôle du relais', error: e);
       _dataErrorMessage = 'Erreur lors du contrôle du relais: $e';
@@ -244,42 +250,33 @@ class EnergyProvider extends ChangeNotifier {
     }
   }
 
+  // Cette méthode a été supprimée ou réécrite car elle était redondante ou mal adaptée
+  // à la récupération des données en temps réel pour l'affichage principal.
+  // Si vous avez besoin de récupérer des données historiques, cette logique
+  // devrait être déplacée vers un service ou une méthode dédiée à l'historique.
+  /*
   Future<void> fetchSensorData(String maisonId) async {
     try {
-      final url = Uri.parse('${ApiConfig.baseUrl}/api/data/$maisonId');
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/data/esp32_maison1/history'),
-        headers: {'x-api-key': 'esp32_secret_key'},
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (maisonId == 'maison1') {
-          maison1Data = DeviceData.fromJson(data);
-        } else if (maisonId == 'maison2') {
-          maison2Data = DeviceData.fromJson(data);
+      final latestData = await _esp32Service.getCurrentData(maisonId);
+      if (latestData != null) {
+        if (maisonId == _maison1DeviceId) {
+          maison1Data = latestData;
+        } else if (maisonId == _maison2DeviceId) {
+          maison2Data = latestData;
         }
-
-        _logger.i('Données reçues : ${response.body}');
-
+        _logger.i('Données récentes pour $maisonId: ${latestData.toJson()}');
         notifyListeners();
       } else {
-        _logger.e(
-          'Erreur lors de la récupération des données',
-          error: response.statusCode,
-        );
-        _logger.e('Erreur API : ${response.statusCode} - ${response.body}');
-        _dataErrorMessage =
-            'Erreur lors de la récupération des données : ${response.statusCode}';
-        notifyListeners();
+        _logger.w('Aucune donnée récente trouvée pour $maisonId');
       }
     } catch (e) {
-      _logger.e('Erreur réseau', error: e);
-      _dataErrorMessage = 'Erreur réseau : $e';
+      _logger.e('Erreur réseau ou traitement dans fetchSensorData', error: e);
+      _dataErrorMessage = 'Erreur fetchSensorData : $e';
       notifyListeners();
     }
   }
+  */
 }
 
-final baseUrl = dotenv.env['BASE_URL'];
+// Assurez-vous que 'baseUrl' est correctement défini si utilisé dans d'autres fichiers.
+// final baseUrl = dotenv.env['BASE_URL'];

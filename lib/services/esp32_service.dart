@@ -124,7 +124,7 @@ class ESP32Service extends ChangeNotifier {
           error: maison1Data.toJson(),
         );
         _dataController.add(maison1Data.toJson());
-        await _databaseService.saveDeviceData(maison1Data);
+        // await _databaseService.saveDeviceData(maaison1Data); // <-- LIGNE COMMENTÉE
       }
 
       if (maison2Data != null) {
@@ -133,7 +133,7 @@ class ESP32Service extends ChangeNotifier {
           error: maison2Data.toJson(),
         );
         _dataController.add(maison2Data.toJson());
-        await _databaseService.saveDeviceData(maison2Data);
+        // await _databaseService.saveDeviceData(maison2Data); // <-- LIGNE COMMENTÉE
       }
     } catch (e) {
       _logger.e(
@@ -167,35 +167,47 @@ class ESP32Service extends ChangeNotifier {
         try {
           switch (command.commandType) {
             case 'recharge_energy':
-              // La commande de recharge est initiée par l'utilisateur et envoyée
-              // immédiatement. Si elle est ici, c'est qu'elle a été trouvée en
-              // "pending" après sa création. On la marque comme exécutée.
               _logger.i(
                 'Commande de recharge d\'énergie traitée (marquage exécuté)',
                 error: command.toJson(),
               );
-              // Ne pas ré-exécuter la logique de recharge ici, juste marquer.
-              await _executeCommand(
-                command,
-              ); // Marque la commande comme exécutée
+              await _executeCommand(command);
               break;
 
-            case 'toggle_relay':
+            case 'relay_control': // Gérer le type de commande 'relay_control'
               final relayNumber = command.parameters['relay_number'] as int?;
-              if (relayNumber != null) {
-                // Appelle la méthode pour basculer le relais, en passant le deviceId
-                await _toggleRelay(command.deviceId, relayNumber);
-                await _executeCommand(
-                  command,
-                ); // Marque la commande comme exécutée
+              final status = command.parameters['status'] as bool?;
+
+              if (relayNumber != null && status != null) {
+                _logger.i(
+                  'Commande relay_control traitée: Relais $relayNumber de ${command.deviceId} mis à ${status ? "ON" : "OFF"}',
+                  error: command.toJson(),
+                );
+                // L'application Flutter ne contrôle pas directement le relais physique.
+                // Elle marque juste la commande comme exécutée après que l'ESP32 est censé l'avoir traitée.
+                await _executeCommand(command); // Marquer comme exécutée
               } else {
                 _logger.w(
-                  'Commande toggle_relay invalide: relay_number manquant',
+                  'Commande relay_control invalide: champs manquants (relay_number ou status)',
                   error: command.toJson(),
                 );
                 await _executeCommand(
                   command,
-                ); // Marquer comme exécutée pour éviter la boucle
+                ); // Marquer comme exécutée pour éviter de la re-traiter
+              }
+              break;
+
+            // Les cas 'toggle_relay' et 'set_relay' sont supprimés/commentés car 'relay_control' est le type canonique reçu.
+            // Si votre backend renvoie toujours 'relay_control' pour les actions de relais, ces cas sont redondants.
+            /*
+            case 'toggle_relay':
+              final relayNumber = command.parameters['relay_number'] as int?;
+              if (relayNumber != null) {
+                _logger.i('Commande toggle_relay traitée pour ${command.deviceId} relais $relayNumber');
+                await _executeCommand(command);
+              } else {
+                _logger.w('Commande toggle_relay invalide: relay_number manquant', error: command.toJson());
+                await _executeCommand(command);
               }
               break;
 
@@ -203,21 +215,14 @@ class ESP32Service extends ChangeNotifier {
               final relayNumber = command.parameters['relay_number'] as int?;
               final state = command.parameters['state'] as bool?;
               if (relayNumber != null && state != null) {
-                // Appelle la méthode pour définir l'état du relais, en passant le deviceId
-                await _setRelay(command.deviceId, relayNumber, state);
-                await _executeCommand(
-                  command,
-                ); // Marque la commande comme exécutée
+                _logger.i('Commande set_relay traitée pour ${command.deviceId} relais $relayNumber à $state');
+                await _executeCommand(command);
               } else {
-                _logger.w(
-                  'Commande set_relay invalide: champs manquants (relay_number ou state)',
-                  error: command.toJson(),
-                );
-                await _executeCommand(
-                  command,
-                ); // Marquer comme exécutée pour éviter la boucle
+                _logger.w('Commande set_relay invalide: champs manquants (relay_number ou state)', error: command.toJson());
+                await _executeCommand(command);
               }
               break;
+            */
 
             case 'display_message':
               final message = command.parameters['message'] as String?;
@@ -246,8 +251,9 @@ class ESP32Service extends ChangeNotifier {
                 'Traitement commande request_data pour ${command.deviceId}',
                 error: command.toJson(),
               );
-              // Forcer une récupération immédiate des données pour cet appareil
-              await getCurrentData(command.deviceId);
+              await getCurrentData(
+                command.deviceId,
+              ); // Ceci est une requête GET, donc c'est correct.
               await _executeCommand(
                 command,
               ); // Marque la commande comme exécutée
@@ -258,16 +264,10 @@ class ESP32Service extends ChangeNotifier {
                 'Type de commande non supporté ou traitement manquant: ${command.commandType}',
                 error: command.toJson(),
               );
-              // Si la commande n'est pas reconnue ou ne peut être traitée, elle devrait être marquée
-              // comme exécutée pour ne pas bloquer le système.
-              await _executeCommand(
-                command,
-              ); // Marquer comme exécutée pour éviter la boucle infinie
+              await _executeCommand(command);
           }
         } catch (e) {
           _logger.e('Erreur lors du traitement de la commande', error: e);
-          // Si une erreur se produit pendant le traitement, marquer la commande comme exécutée
-          // pour éviter qu'elle ne soit réessayée indéfiniment si l'erreur est persistante.
           await _executeCommand(command);
         }
       }
@@ -291,6 +291,11 @@ class ESP32Service extends ChangeNotifier {
           'Impossible de marquer la commande comme exécutée: ID de commande est null',
           error: command.toJson(),
         );
+        // Pour la robustesse, si l'ID est null, vous pourriez envisager
+        // de marquer la commande comme exécutée d'une autre manière (si votre backend le permet),
+        // par exemple en utilisant device_id et timestamp comme identifiants.
+        // Cependant, markCommandAsExecuted attend un int.
+        // La vraie solution est que le backend fournisse un ID.
       }
     } catch (e) {
       _logger.e(
@@ -356,10 +361,7 @@ class ESP32Service extends ChangeNotifier {
           'Commande de relais envoyée avec succès au backend',
           error: command.toJson(),
         );
-        // Si la commande a un ID après la sauvegarde, marquez-la comme exécutée immédiatement.
-        // Cela dépend si `saveCommand` met à jour l'objet `command` avec un ID du backend.
-        // Si non, le marquage sera fait par `_checkPendingCommands` plus tard.
-        // Pour l'instant, on ne marque pas ici si `command.id` est null, car il n'est pas encore assigné par le backend.
+        // La commande sera marquée comme exécutée par _checkPendingCommands une fois qu'elle est récupérée avec un ID valide.
       } else {
         _logger.w(
           'Échec de l\'envoi immédiat de la commande de relais. Sera réessayé par _checkPendingCommands.',
@@ -430,17 +432,7 @@ class ESP32Service extends ChangeNotifier {
           if (success) {
             _logger.i('Commande de recharge envoyée avec succès au backend');
 
-            // IMPORTANT: MARQUER LA COMMANDE COMME EXÉCUTÉE ICI
-            // Si `_databaseService.saveCommand` retourne la commande avec un ID,
-            // vous pouvez l'utiliser directement. Sinon, le marquage par _checkPendingCommands
-            // est la solution de repli.
-            // Pour l'instant, on ne marque pas ici si `command.id` est null, car il n'est pas encore assigné par le backend.
-            // Le marquage sera fait par `_checkPendingCommands` une fois qu'elle est récupérée avec un ID.
-            // Ou, si votre `saveCommand` met à jour l'objet `command` avec l'ID, vous pouvez faire :
-            // if (command.id != null) {
-            //   await _databaseService.markCommandAsExecuted(command.id!);
-            //   _logger.i('Commande de recharge marquée comme exécutée localement');
-            // }
+            // La commande sera marquée comme exécutée par `_checkPendingCommands` une fois qu'elle est récupérée avec un ID valide.
 
             final rechargeVerified = await verifyRechargeStatus(
               deviceId,
